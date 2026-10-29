@@ -100,22 +100,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/65 backdrop-blur-sm">
-      <div className="w-full max-w-lg bg-[#0d0f18] border-l border-white/10 h-full overflow-y-auto p-6 sm:p-7 space-y-8 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex justify-end bg-[#2d1810]/40 backdrop-blur-xs">
+      <div className="w-full max-w-lg bg-[#fffaf3] border-l border-[#ead0b2] h-full overflow-y-auto p-6 sm:p-7 space-y-8 shadow-2xl text-[#2d1810]">
         {/* Cabeçalho */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-4">
+        <div className="flex items-center justify-between border-b border-[#eed6ba] pb-4">
           <div>
-            <h2 className="font-display text-xl font-bold text-white">
-              Hardware ESP32 & Calibração
+            <h2 className="font-display text-2xl font-bold text-[#2d1810]">
+              Conexão ESP32 & Bebidas
             </h2>
-            <p className="text-xs text-slate-400">
-              Configure a comunicação Wi-Fi / USB Serial e as vazões das 4 bombas
+            <p className="text-xs text-[#7c533d]">
+              Ajuste o endereço Wi-Fi/USB do ESP32 e calibre as 4 bombas
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 cursor-pointer"
+            className="p-2 rounded-xl bg-[#f7e9d6] hover:bg-[#efdac0] text-[#5c3724] cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -123,24 +123,24 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
         {/* Diagnóstico Atual */}
         {hardware && (
-          <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2">
+          <div className="p-4 rounded-2xl bg-[#fff3e2] border border-[#ebd0b0] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Status Atual
+              <span className="text-xs font-bold uppercase tracking-wider text-[#8a583c]">
+                Diagnóstico da Máquina
               </span>
               <button
                 type="button"
                 onClick={handleProbe}
                 disabled={probing}
-                className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 cursor-pointer"
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-[#ea580c] hover:text-[#c2410c] cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${probing ? 'animate-spin' : ''}`} />
                 Testar Agora
               </button>
             </div>
-            <p className="text-sm text-slate-200">{hardware.detail}</p>
+            <p className="text-sm font-medium text-[#3b2116]">{hardware.detail}</p>
             {hardware.available_serial_ports.length > 0 && (
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#7c533d]">
                 Portas COM detectadas: {hardware.available_serial_ports.join(', ')}
               </p>
             )}
@@ -149,28 +149,28 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
         {/* Formulário de Conexão ESP32 */}
         <form onSubmit={handleSaveConnection} className="space-y-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Server className="w-4 h-4 text-amber-400" />
+          <div className="flex items-center gap-2 text-sm font-bold text-[#2d1810]">
+            <Server className="w-4 h-4 text-[#ea580c]" />
             <span>Modo de Comunicação</span>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             {(
               [
-                { id: 'auto', label: 'Auto (Wi-Fi → USB → Sim)' },
+                { id: 'auto', label: 'Automático (Recomendado)' },
                 { id: 'wifi', label: 'Apenas Wi-Fi (HTTP)' },
-                { id: 'serial', label: 'Apenas USB Serial' },
-                { id: 'simulator', label: 'Modo Simulador' },
+                { id: 'serial', label: 'Apenas Cabo USB' },
+                { id: 'simulator', label: 'Modo Demonstração' },
               ] as const
             ).map((opt) => (
               <button
                 key={opt.id}
                 type="button"
                 onClick={() => setMode(opt.id)}
-                className={`p-2.5 rounded-xl text-xs font-medium border text-left transition-all cursor-pointer ${
+                className={`p-2.5 rounded-xl text-xs font-semibold border text-left transition-all cursor-pointer ${
                   mode === opt.id
-                    ? 'bg-amber-500/15 border-amber-400 text-amber-200'
-                    : 'bg-white/[0.03] border-white/10 text-slate-300 hover:bg-white/[0.06]'
+                    ? 'bg-[#ffedd5] border-[#ea580c] text-[#9a3412]'
+                    : 'bg-white border-[#e6c8a5] text-[#69432e] hover:bg-[#fff6ea]'
                 }`}
               >
                 {opt.label}
@@ -180,7 +180,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
-              <label className="block text-xs text-slate-400 mb-1">
+              <label className="block text-xs font-semibold text-[#7c533d] mb-1">
                 Host / IP do ESP32 (Wi-Fi)
               </label>
               <input
@@ -188,23 +188,25 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
                 placeholder="bartender.local ou 192.168.1.50"
-                className="w-full px-3 py-2 rounded-xl bg-[#08090e] border border-white/12 text-sm text-white"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-[#e5c7a3] text-sm text-[#2d1810]"
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Porta HTTP</label>
+              <label className="block text-xs font-semibold text-[#7c533d] mb-1">
+                Porta HTTP
+              </label>
               <input
                 type="number"
                 value={port}
                 onChange={(e) => setPort(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-xl bg-[#08090e] border border-white/12 text-sm text-white"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-[#e5c7a3] text-sm text-[#2d1810]"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-slate-400 mb-1">
+              <label className="block text-xs font-semibold text-[#7c533d] mb-1">
                 Porta USB Serial
               </label>
               <input
@@ -212,16 +214,18 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 value={serialPort}
                 onChange={(e) => setSerialPort(e.target.value)}
                 placeholder="COM3"
-                className="w-full px-3 py-2 rounded-xl bg-[#08090e] border border-white/12 text-sm text-white"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-[#e5c7a3] text-sm text-[#2d1810]"
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Baudrate</label>
+              <label className="block text-xs font-semibold text-[#7c533d] mb-1">
+                Velocidade (Baud)
+              </label>
               <input
                 type="number"
                 value={serialBaud}
                 onChange={(e) => setSerialBaud(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-xl bg-[#08090e] border border-white/12 text-sm text-white"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-[#e5c7a3] text-sm text-[#2d1810]"
               />
             </div>
           </div>
@@ -229,7 +233,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           <button
             type="submit"
             disabled={savingConn}
-            className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#ea580c] to-[#f97316] hover:brightness-105 text-white font-sans-ui font-bold text-xs flex items-center justify-center gap-2 shadow-sm cursor-pointer"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{savingConn ? 'Salvando...' : 'Salvar Configuração de Conexão'}</span>
@@ -237,10 +241,10 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         </form>
 
         {/* Calibração das 4 Bombas */}
-        <div className="space-y-4 border-t border-white/10 pt-6">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Sliders className="w-4 h-4 text-amber-400" />
-            <span>Ingredientes & Vazão das Bombas (ESP32-WROOM-32)</span>
+        <div className="space-y-4 border-t border-[#eed6ba] pt-6">
+          <div className="flex items-center gap-2 text-sm font-bold text-[#2d1810]">
+            <Sliders className="w-4 h-4 text-[#15803d]" />
+            <span>Garrafas & Calibração de Vazão</span>
           </div>
 
           <div className="space-y-3">
@@ -253,23 +257,23 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               return (
                 <div
                   key={p.id}
-                  className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5"
+                  className="p-3.5 rounded-2xl bg-white border border-[#ecd2b4] space-y-2.5"
                 >
                   <div className="flex items-center justify-between text-xs">
-                    <span className="inline-flex items-center gap-2 font-semibold text-white">
+                    <span className="inline-flex items-center gap-2 font-bold text-[#2d1810]">
                       <span
                         className="w-2.5 h-2.5 rounded-full"
                         style={{ backgroundColor: p.color_hex }}
                       />
                       {p.label}
                     </span>
-                    <span className="text-slate-400">GPIO {p.gpio}</span>
+                    <span className="text-[#8a5d42] font-medium">Pino GPIO {p.gpio}</span>
                   </div>
 
                   <div className="grid grid-cols-12 gap-2 items-end">
                     <div className="col-span-7">
-                      <label className="block text-[11px] text-slate-400 mb-1">
-                        Bebida instalada
+                      <label className="block text-[11px] font-medium text-[#7c533d] mb-1">
+                        Bebida na garrafa
                       </label>
                       <input
                         type="text"
@@ -280,11 +284,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             [p.id]: { ...draft, ingredient: e.target.value },
                           }))
                         }
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-[#08090e] border border-white/12 text-xs text-white"
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-[#fffaf3] border border-[#e5c7a3] text-xs text-[#2d1810]"
                       />
                     </div>
                     <div className="col-span-3">
-                      <label className="block text-[11px] text-slate-400 mb-1">
+                      <label className="block text-[11px] font-medium text-[#7c533d] mb-1">
                         Vazão (ml/s)
                       </label>
                       <input
@@ -302,18 +306,18 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             },
                           }))
                         }
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-[#08090e] border border-white/12 text-xs text-white"
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-[#fffaf3] border border-[#e5c7a3] text-xs text-[#2d1810]"
                       />
                     </div>
                     <div className="col-span-2">
                       <button
                         type="button"
                         onClick={() => handlePumpSave(p.id)}
-                        className="w-full py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold text-white flex items-center justify-center cursor-pointer"
+                        className="w-full py-1.5 rounded-lg bg-[#15803d] hover:bg-[#166534] text-xs font-bold text-white flex items-center justify-center cursor-pointer"
                         title="Salvar bomba"
                       >
                         {savedPumpId === p.id ? (
-                          <Check className="w-4 h-4 text-emerald-400" />
+                          <Check className="w-4 h-4 text-white" />
                         ) : (
                           'OK'
                         )}
@@ -329,4 +333,3 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     </div>
   );
 };
-

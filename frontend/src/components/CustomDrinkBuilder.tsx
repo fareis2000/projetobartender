@@ -1,12 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Citrus,
   Clock,
   Droplets,
+  Minus,
   Plus,
   RotateCcw,
   Sparkles,
-  Wand2,
 } from 'lucide-react';
 import type { CustomDrinkPayload, PumpConfig, PumpId } from '../types/bartender';
 import { GlassArtwork } from './GlassArtwork';
@@ -26,18 +27,18 @@ const QUICK_PRESETS: Array<{
   volumes: Record<PumpId, number>;
 }> = [
   {
-    label: 'Equilíbrio Tropical (320ml)',
-    name: 'Tropical Custom',
+    label: 'Pôr do Sol Tropical (320ml)',
+    name: 'Pôr do Sol Tropical',
     volumes: { amarelo: 60, vermelho: 40, verde: 0, azul: 220 },
   },
   {
-    label: 'Maçã Cítrica Fizz (300ml)',
-    name: 'Green Citrus Fizz',
+    label: 'Refresco Cítrico Verde (300ml)',
+    name: 'Refresco da Ilha',
     volumes: { amarelo: 45, vermelho: 0, verde: 55, azul: 200 },
   },
   {
-    label: 'Arco-Íris 4 Bombas (350ml)',
-    name: 'Quad Mix',
+    label: 'Salada de Frutas Fizz (350ml)',
+    name: 'Mix Verão Completo',
     volumes: { amarelo: 35, vermelho: 35, verde: 35, azul: 245 },
   },
 ];
@@ -47,7 +48,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
   disabled,
   onSubmitCustom,
 }) => {
-  const [name, setName] = useState('Minha Criação');
+  const [name, setName] = useState('Meu Drink de Verão');
   const [volumes, setVolumes] = useState<Record<PumpId, number>>({
     amarelo: 50,
     vermelho: 40,
@@ -95,7 +96,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     e.preventDefault();
     if (overLimit || underLimit || disabled) return;
     onSubmitCustom({
-      name: name.trim() || 'Mix Personalizado',
+      name: name.trim() || 'Drink Personalizado',
       ...volumes,
     });
   };
@@ -111,45 +112,45 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
       onSubmit={handlePrepare}
       className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start"
     >
-      {/* Coluna Esquerda: Controles das 4 Bombas */}
-      <div className="lg:col-span-7 space-y-6 rounded-3xl bg-[#11131d]/90 border border-white/10 p-6 sm:p-8 shadow-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
+      {/* Balcão de Ingredientes (Esquerda) */}
+      <div className="linen-card lg:col-span-7 space-y-6 rounded-[30px] border border-[#ebd0b2] p-6 sm:p-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#eed7bc] pb-5">
           <div>
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-amber-400">
-              <Wand2 className="w-3.5 h-3.5" />
-              Estúdio de Mixologia
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#15803d]">
+              <Citrus className="w-4 h-4" />
+              Balcão Tropical Interativo
             </span>
-            <h2 className="font-display text-2xl font-bold text-white mt-1">
-              Monte seu Drink ao Mililitro
+            <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#2d1810] mt-1">
+              Misture sua Receita na Medida
             </h2>
           </div>
 
           <button
             type="button"
             onClick={resetAll}
-            className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 transition-colors cursor-pointer"
+            className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-[#6e4631] bg-[#f8ebd9] hover:bg-[#f2dec3] border border-[#e5c7a3] transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            Zerar Tudo
+            Esvaziar Copo
           </button>
         </div>
 
-        {/* Nome da Receita + Sugestões Rápidas */}
+        {/* Nome da Bebida + Combinações Sugeridas */}
         <div className="space-y-3">
-          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Nome da sua criação
+          <label className="block text-xs font-bold uppercase tracking-wider text-[#7c533d]">
+            Batize o seu drink
           </label>
           <input
             type="text"
             maxLength={40}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Ex: Sunset Especial"
-            className="w-full px-4 py-2.5 rounded-xl bg-[#090b11] border border-white/12 text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 text-sm"
+            placeholder="Ex: Brisa de Maracujá"
+            className="w-full px-4 py-3 rounded-2xl bg-white border border-[#e5c7a3] text-[#2d1810] placeholder-[#b08c74] focus:outline-none focus:border-[#ea580c] text-sm font-medium shadow-2xs"
           />
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-xs text-slate-400 mr-1">Bases rápidas:</span>
+            <span className="text-xs font-medium text-[#7c533d] mr-1">Sugestões da casa:</span>
             {QUICK_PRESETS.map((preset) => (
               <button
                 key={preset.label}
@@ -158,7 +159,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
                   setName(preset.name);
                   setVolumes(preset.volumes);
                 }}
-                className="px-2.5 py-1 rounded-lg text-xs bg-white/[0.04] hover:bg-white/[0.09] text-slate-200 border border-white/10 transition-colors cursor-pointer"
+                className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#fff6e9] hover:bg-[#ffead0] text-[#5e3925] border border-[#e7c9a6] transition-colors cursor-pointer"
               >
                 {preset.label}
               </button>
@@ -166,7 +167,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
           </div>
         </div>
 
-        {/* Sliders das 4 Bombas */}
+        {/* Controles das 4 Frutas / Bombas */}
         <div className="space-y-4">
           {PUMP_ORDER.map((pid) => {
             const pump = pumpsById[pid];
@@ -177,36 +178,40 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
             return (
               <div
                 key={pid}
-                className="p-4 rounded-2xl bg-[#0b0d14]/90 border border-white/8 hover:border-white/15 transition-colors"
+                className="p-4 sm:p-5 rounded-2xl bg-[#fffdf9] border border-[#eed6ba] hover:border-[#dfba90] transition-colors shadow-2xs"
               >
-                <div className="flex items-center justify-between gap-2 mb-2.5">
-                  <div className="flex items-center gap-2.5">
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-3">
                     <span
-                      className="w-3.5 h-3.5 rounded-full shadow-sm shrink-0"
+                      className="w-4 h-4 rounded-full shadow-xs shrink-0 ring-4 ring-[#f9efe2]"
                       style={{ backgroundColor: pump.color_hex }}
                     />
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-display font-semibold text-sm text-white">
-                          {pump.ingredient}
-                        </span>
-                        <span className="text-[11px] px-2 py-0.5 rounded-md bg-white/[0.05] text-slate-400">
-                          {pump.label} · GPIO {pump.gpio}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400">{pump.description}</p>
+                      <span className="font-display font-bold text-base text-[#2d1810] block">
+                        {pump.ingredient}
+                      </span>
+                      <p className="text-xs text-[#7c533d]">{pump.description}</p>
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0">
-                    <span className="font-display text-lg font-bold text-white">
+                  <div className="text-right shrink-0 bg-[#fdf3e6] px-3 py-1 rounded-xl border border-[#edd4b6]">
+                    <span className="font-display text-lg font-bold text-[#2d1810]">
                       {val}
                     </span>
-                    <span className="text-xs text-slate-400 ml-1">ml</span>
+                    <span className="text-xs font-medium text-[#7c533d] ml-1">ml</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setPumpVolume(pid, val - 25)}
+                    className="p-2 rounded-xl bg-[#f7e9d6] hover:bg-[#efdac0] text-[#5c3724] border border-[#e6c8a4] cursor-pointer shrink-0"
+                    title="Diminuir 25 ml"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+
                   <input
                     type="range"
                     min={0}
@@ -221,9 +226,9 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
                   <button
                     type="button"
                     onClick={() => setPumpVolume(pid, val + 25)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 border border-white/10 cursor-pointer shrink-0"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#f7e9d6] hover:bg-[#efdac0] text-[#4a2b1b] border border-[#e6c8a4] cursor-pointer shrink-0"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-3.5 h-3.5" />
                     25ml
                   </button>
                 </div>
@@ -233,51 +238,51 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
         </div>
       </div>
 
-      {/* Coluna Direita: Preview do Copo em Tempo Real + Resumo */}
-      <div className="lg:col-span-5 rounded-3xl bg-[#11131d]/90 border border-white/10 p-6 sm:p-8 shadow-2xl lg:sticky lg:top-24 space-y-6">
+      {/* Prévia do Copo Tropical (Direita) */}
+      <div className="linen-card lg:col-span-5 rounded-[30px] border border-[#ebd0b2] p-6 sm:p-8 lg:sticky lg:top-24 space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
-              Simulação Visual
+            <p className="text-xs uppercase tracking-wider text-[#15803d] font-bold">
+              Prévia no Copo
             </p>
-            <h3 className="font-display text-xl font-bold text-white">
-              {name.trim() || 'Mix Personalizado'}
+            <h3 className="font-display text-2xl font-bold text-[#2d1810]">
+              {name.trim() || 'Drink Personalizado'}
             </h3>
           </div>
           <div className="text-right">
             <span
               className={`font-display text-2xl font-bold ${
-                overLimit ? 'text-rose-400' : 'text-amber-400'
+                overLimit ? 'text-rose-600' : 'text-[#ea580c]'
               }`}
             >
               {totalMl} ml
             </span>
-            <p className="text-xs text-slate-400">Máx. {MAX_CUP_ML} ml</p>
+            <p className="text-xs text-[#7c533d]">Limite {MAX_CUP_ML} ml</p>
           </div>
         </div>
 
-        {/* Copo Interativo */}
-        <div className="py-4 flex flex-col items-center justify-center rounded-2xl bg-gradient-to-b from-white/[0.03] to-black/30 border border-white/6">
+        {/* Palco Ensolarado do Copo */}
+        <div className="py-5 flex flex-col items-center justify-center rounded-3xl bg-gradient-to-b from-[#fff4e0] via-[#ffecd1] to-[#ffe2bd] border border-[#edd1b0]">
           <GlassArtwork layers={layers} maxCapacityMl={MAX_CUP_ML} size="lg" />
-          <div className="mt-3 flex items-center gap-4 text-xs text-slate-400">
+          <div className="mt-3 flex items-center gap-4 text-xs font-medium text-[#6e4631]">
             <span className="inline-flex items-center gap-1.5">
-              <Droplets className="w-3.5 h-3.5 text-sky-400" />
-              Capacidade: {Math.round((totalMl / MAX_CUP_ML) * 100)}%
+              <Droplets className="w-3.5 h-3.5 text-sky-600" />
+              Copo em {Math.round((totalMl / MAX_CUP_ML) * 100)}%
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
-              Tempo estimado: ~{Math.ceil(estimatedSeconds)}s
+              <Clock className="w-3.5 h-3.5 text-amber-600" />
+              Pronto em ~{Math.ceil(estimatedSeconds)}s
             </span>
           </div>
         </div>
 
-        {/* Resumo das Proporções */}
+        {/* Barra de Proporção */}
         <div className="space-y-2">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>Proporção no copo</span>
+          <div className="flex justify-between text-xs font-medium text-[#6e4631]">
+            <span>Equilíbrio de sabores</span>
             <span>{totalMl} / {MAX_CUP_ML} ml</span>
           </div>
-          <div className="h-3 w-full rounded-full bg-white/[0.06] overflow-hidden flex">
+          <div className="h-3 w-full rounded-full bg-[#f3e3ce] overflow-hidden flex p-0.5 gap-0.5">
             {PUMP_ORDER.map((pid) => {
               const ml = volumes[pid];
               if (ml <= 0 || totalMl <= 0) return null;
@@ -285,9 +290,10 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
               return (
                 <div
                   key={pid}
+                  className="rounded-full"
                   style={{
                     width: `${pct}%`,
-                    backgroundColor: pumpsById[pid]?.color_hex ?? '#fff',
+                    backgroundColor: pumpsById[pid]?.color_hex ?? '#ea580c',
                   }}
                 />
               );
@@ -295,17 +301,17 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
           </div>
 
           {overLimit && (
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 mt-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+            <div className="flex items-center gap-2.5 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-800 mt-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>
-                Volume acima do limite de segurança ({MAX_CUP_ML} ml). Reduza algum ingrediente para evitar transbordamento.
+                O copo comporta até {MAX_CUP_ML} ml com segurança. Diminua um pouquinho algum ingrediente!
               </span>
             </div>
           )}
 
           {underLimit && (
-            <p className="text-xs text-slate-400 pt-1">
-              Adicione pelo menos 10 ml em uma das bombas para liberar o preparo.
+            <p className="text-xs text-[#7c533d] pt-1">
+              Escolha pelo menos 10 ml de bebida para preparar seu drink.
             </p>
           )}
         </div>
@@ -313,13 +319,12 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
         <button
           type="submit"
           disabled={disabled || overLimit || underLimit}
-          className="w-full py-3.5 px-5 rounded-xl font-display font-bold text-sm text-slate-950 bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:from-amber-300 hover:to-orange-400 shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full py-4 px-5 rounded-2xl font-sans-ui font-bold text-sm text-white bg-gradient-to-r from-[#15803d] via-[#0d9488] to-[#0ea5e9] hover:brightness-105 shadow-lg shadow-emerald-700/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
         >
           <Sparkles className="w-4 h-4" />
-          <span>Preparar Minha Receita ({totalMl} ml)</span>
+          <span>Servir Minha Receita ({totalMl} ml)</span>
         </button>
       </div>
     </form>
   );
 };
-

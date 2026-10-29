@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, FlaskConical, Gauge, Sparkles, Zap } from 'lucide-react';
+import { AlertCircle, Citrus, Sparkles, Sun } from 'lucide-react';
 import { bartenderApi } from './api/client';
 import { CustomDrinkBuilder } from './components/CustomDrinkBuilder';
 import { DrinkCard } from './components/DrinkCard';
 import { type ActiveTab, Navbar } from './components/Navbar';
 import { PreparationModal } from './components/PreparationModal';
 import { SettingsDrawer } from './components/SettingsDrawer';
+import { TropicalBackdropLeaves, TropicalHeroArt } from './components/TropicalDecor';
 import type {
   ConnectionConfigPayload,
   CustomDrinkPayload,
@@ -62,7 +63,7 @@ export const App: React.FC = () => {
       setErrorBanner(
         err instanceof Error
           ? err.message
-          : 'Não foi possível conectar à API FastAPI.',
+          : 'Não foi possível conectar ao servidor do bar.',
       );
     } finally {
       setLoading(false);
@@ -150,7 +151,7 @@ export const App: React.FC = () => {
       setModalOpen(true);
     } catch (err) {
       setErrorBanner(
-        err instanceof Error ? err.message : 'Erro ao iniciar drink customizado.',
+        err instanceof Error ? err.message : 'Erro ao iniciar drink personalizado.',
       );
     }
   };
@@ -193,12 +194,8 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col relative">
-      {/* Iluminação ambiente de fundo */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden -z-10">
-        <div className="absolute -top-40 left-1/4 w-[520px] h-[520px] rounded-full bg-amber-500/10 blur-[130px]" />
-        <div className="absolute top-1/3 -right-32 w-[460px] h-[460px] rounded-full bg-rose-500/10 blur-[130px]" />
-        <div className="absolute -bottom-32 left-10 w-[420px] h-[420px] rounded-full bg-sky-500/8 blur-[130px]" />
-      </div>
+      {/* Folhagens de palmeira, costela-de-adão e luz de pôr do sol */}
+      <TropicalBackdropLeaves />
 
       <Navbar
         activeTab={activeTab}
@@ -207,71 +204,73 @@ export const App: React.FC = () => {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
-        {/* Alerta de erro se houver */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-10">
+        {/* Aviso caso haja erro de comunicação */}
         {errorBanner && (
-          <div className="flex items-center justify-between gap-4 p-4 rounded-2xl bg-rose-500/12 border border-rose-500/30 text-sm text-rose-200">
+          <div className="flex items-center justify-between gap-4 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-sm text-rose-800 shadow-xs">
             <div className="flex items-center gap-3">
-              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
               <span>{errorBanner}</span>
             </div>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-xs font-semibold text-white shrink-0 cursor-pointer"
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shrink-0 cursor-pointer"
             >
-              Configurar ESP32
+              Ajustar Conexão
             </button>
           </div>
         )}
 
         {activeTab === 'menu' ? (
           <>
-            {/* Hero / Banner Principal */}
-            <section className="relative rounded-3xl bg-gradient-to-br from-[#131624] via-[#10121c] to-[#17121c] border border-white/10 p-6 sm:p-10 overflow-hidden shadow-2xl">
-              <div className="max-w-2xl space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs font-semibold">
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Dosagem Volumétrica Controlada por ESP32</span>
+            {/* Banner Tropical de Verão */}
+            <section className="relative rounded-[34px] bg-gradient-to-br from-[#fff5e4] via-[#ffe6c4] to-[#ffd2a6] border border-[#ebcaa3] p-7 sm:p-10 lg:px-12 overflow-hidden shadow-[0_24px_50px_-20px_rgba(165,82,25,0.2)]">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                <div className="lg:col-span-7 space-y-4">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/80 border border-[#e7c59d] text-[#b45309] text-xs font-bold shadow-2xs">
+                    <Sun className="w-4 h-4 text-[#f59e0b]" />
+                    <span>Bar Tropical Automatizado</span>
+                  </div>
+
+                  <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold text-[#2d1810] leading-[1.12]">
+                    Refrescância de verão,{' '}
+                    <span className="text-[#ea580c] italic">
+                      servida na medida perfeita.
+                    </span>
+                  </h1>
+
+                  <p className="text-sm sm:text-base text-[#5e3b29] leading-relaxed max-w-xl">
+                    Escolha um dos nossos coquetéis tropicais abaixo ou misture frutas
+                    cítricas, morango, maçã verde e água gaseificada bem gelada no nosso
+                    balcão interativo.
+                  </p>
+
+                  <div className="pt-2 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('custom')}
+                      className="inline-flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-[#15803d] to-[#0d9488] hover:brightness-105 text-white font-sans-ui font-bold text-sm shadow-lg shadow-emerald-700/20 transition-all cursor-pointer"
+                    >
+                      <Citrus className="w-4 h-4" />
+                      <span>Montar Meu Próprio Drink</span>
+                    </button>
+                  </div>
                 </div>
 
-                <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight leading-tight">
-                  Seu drink favorito, dosado com{' '}
-                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400">
-                    precisão robótica.
-                  </span>
-                </h1>
-
-                <p className="text-sm sm:text-base text-slate-300/90 leading-relaxed">
-                  Escolha uma receita assinada no cardápio ou abra o estúdio{' '}
-                  <strong className="text-white">Monte seu Drink</strong> para combinar
-                  os mililitros exatos de cada uma das 4 bombas peristálticas.
-                </p>
-
-                <div className="pt-2 flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('custom')}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 font-display font-bold text-sm shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
-                  >
-                    <FlaskConical className="w-4 h-4" />
-                    <span>Criar Drink Personalizado</span>
-                  </button>
-
-                  <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-xs text-slate-300">
-                    <Gauge className="w-4 h-4 text-sky-400" />
-                    <span>4 Bombas Ativas · GPIOs 16, 17, 18, 19</span>
-                  </div>
+                {/* Ilustração Tropical à Direita */}
+                <div className="lg:col-span-5">
+                  <TropicalHeroArt />
                 </div>
               </div>
             </section>
 
-            {/* Barra de Categorias */}
+            {/* Seletor de Categorias do Cardápio */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-amber-400" />
-                <h2 className="font-display text-xl font-bold text-white">
-                  Cardápio de Drinks
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-5 h-5 text-[#ea580c]" />
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#2d1810]">
+                  Nosso Cardápio de Verão
                 </h2>
               </div>
 
@@ -281,10 +280,10 @@ export const App: React.FC = () => {
                     key={cat}
                     type="button"
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    className={`px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer ${
                       selectedCategory === cat
-                        ? 'bg-white text-slate-950 shadow'
-                        : 'bg-white/[0.05] text-slate-300 hover:bg-white/[0.1] border border-white/10'
+                        ? 'bg-[#2d1810] text-[#fff8ee] shadow-sm'
+                        : 'bg-white/80 text-[#69432e] hover:bg-white border border-[#e6c8a5]'
                     }`}
                   >
                     {cat}
@@ -293,18 +292,18 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Grid de Cards */}
+            {/* Grade de Drinks */}
             {loading ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7">
                 {[1, 2, 3].map((n) => (
                   <div
                     key={n}
-                    className="h-96 rounded-2xl bg-white/[0.03] border border-white/8 animate-pulse"
+                    className="h-96 rounded-[28px] bg-white/50 border border-[#ebd0b2] animate-pulse"
                   />
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-7">
                 {filteredDrinks.map((drink) => (
                   <DrinkCard
                     key={drink.id}
@@ -326,8 +325,8 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="border-t border-white/8 py-6 mt-12 text-center text-xs text-slate-500">
-        Bartender Automático v2.0 · React + TypeScript + Tailwind CSS · FastAPI · ESP32-WROOM-32
+      <footer className="border-t border-[#ead0b2]/70 bg-[#fffaf2]/60 py-6 mt-14 text-center text-xs font-medium text-[#7c533d]">
+        🍹 Bartender Tropical · Coquetelaria Automatizada com ESP32
       </footer>
 
       <PreparationModal
@@ -351,4 +350,3 @@ export const App: React.FC = () => {
   );
 };
 export default App;
-

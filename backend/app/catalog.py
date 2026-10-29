@@ -56,15 +56,15 @@ BASE_RECIPES: list[DrinkRecipe] = [
         id="red",
         code="RED",
         name="Red Robotics",
-        subtitle="Soda Italiana de Morango",
+        subtitle="Soda Italiana de Morango & Hibisco",
         description=(
-            "Algoritmo líquido com controle de sabor e visual high-tech. "
-            "Entradas, processamento e saída em perfeita sincronia."
+            "Algoritmo líquido com controle de sabor e visual vibrante. "
+            "Entradas, processamento e saída em perfeita sincronia refrescante."
         ),
-        category="Clássicos Tech",
-        badge="Clássico #01",
-        accent_from="#ef4444",
-        accent_to="#ec4899",
+        category="Clássicos da Casa",
+        badge="Frutas Vermelhas",
+        accent_from="#e11d48",
+        accent_to="#f97316",
         glass_color="#f43f5e",
         steps=[
             DoseStep(pump="vermelho", ml=70, pause_ms=1500),
@@ -75,16 +75,16 @@ BASE_RECIPES: list[DrinkRecipe] = [
         id="yellow",
         code="YELLOW",
         name="Yellow Web",
-        subtitle="Limonada & Citrus Fizz",
+        subtitle="Limonada Tropical & Maracujá",
         description=(
-            "Leve, fluida e fácil de gostar. Um drink que te guia, "
-            "gole após gole, como uma navegação bem feita."
+            "Leve, solar e fácil de gostar. Um drink cítrico que te guia, "
+            "gole após gole, como uma brisa de verão."
         ),
-        category="Clássicos Tech",
-        badge="Refrescante",
-        accent_from="#f59e0b",
+        category="Clássicos da Casa",
+        badge="Cítrico Solar",
+        accent_from="#ea580c",
         accent_to="#eab308",
-        glass_color="#fbbf24",
+        glass_color="#f59e0b",
         steps=[
             DoseStep(pump="amarelo", ml=100, pause_ms=1500),
             DoseStep(pump="azul", ml=250, pause_ms=0),
@@ -94,16 +94,16 @@ BASE_RECIPES: list[DrinkRecipe] = [
         id="green",
         code="GREEN",
         name="Green Games",
-        subtitle="Soda de Maçã Verde",
+        subtitle="Refresco de Maçã Verde & Hortelã",
         description=(
-            "Começa suave, cresce em cor e energia e termina com aquela "
-            "vontade de jogar — ou beber — mais uma vez."
+            "Começa suave, cresce em frescor botânico e termina com aquela "
+            "vontade de jogar — ou brindar — mais uma vez."
         ),
-        category="Clássicos Tech",
-        badge="Energia",
-        accent_from="#10b981",
-        accent_to="#06b6d4",
-        glass_color="#34d399",
+        category="Clássicos da Casa",
+        badge="Botânico",
+        accent_from="#059669",
+        accent_to="#14b8a6",
+        glass_color="#10b981",
         steps=[
             DoseStep(pump="verde", ml=101, pause_ms=1500),
             DoseStep(pump="azul", ml=250, pause_ms=0),
@@ -113,15 +113,15 @@ BASE_RECIPES: list[DrinkRecipe] = [
         id="mix",
         code="MIX",
         name="Mix Basics",
-        subtitle="Blend Sunset Citrus & Berry",
+        subtitle="Pôr do Sol de Frutas & Citrus",
         description=(
-            "Uma receita montada em etapas com um algoritmo vencedor. "
-            "Cada sabor entra no jogo, o sistema roda e o resultado é hexa."
+            "Uma receita montada em camadas douradas e avermelhadas. "
+            "Cada fruta entra em cena e o resultado é puro verão."
         ),
-        category="Clássicos Tech",
-        badge="Favorito da Casa",
-        accent_from="#f97316",
-        accent_to="#ef4444",
+        category="Clássicos da Casa",
+        badge="Favorito da Praia",
+        accent_from="#ea580c",
+        accent_to="#e11d48",
         glass_color="#fb7185",
         steps=[
             DoseStep(pump="amarelo", ml=50, pause_ms=1500),
@@ -130,19 +130,19 @@ BASE_RECIPES: list[DrinkRecipe] = [
         ],
     ),
     DrinkRecipe(
-        id="cyber-tropics",
-        code="CYBER_TROPICS",
-        name="Cyber Tropics",
-        subtitle="Fusão Cítrica & Maçã Verde",
+        id="brisa-tropical",
+        code="BRISA_TROPICAL",
+        name="Brisa de Verão",
+        subtitle="Maracujá, Maçã Verde & Água com Gás",
         description=(
-            "Combinação vibrante entre acidez cítrica e frescor de maçã verde, "
-            "finalizada com água gaseificada."
+            "Encontro refrescante entre o toque ácido do maracujá e o frescor "
+            "da maçã verde com hortelã e borbulhas geladas."
         ),
-        category="Autorais ESP32",
-        badge="Novo",
-        accent_from="#84cc16",
-        accent_to="#10b981",
-        glass_color="#a3e635",
+        category="Especiais Tropicais",
+        badge="Refrescância Máxima",
+        accent_from="#16a34a",
+        accent_to="#eab308",
+        glass_color="#84cc16",
         steps=[
             DoseStep(pump="amarelo", ml=55, pause_ms=1200),
             DoseStep(pump="verde", ml=55, pause_ms=1200),
@@ -150,19 +150,19 @@ BASE_RECIPES: list[DrinkRecipe] = [
         ],
     ),
     DrinkRecipe(
-        id="full-stack",
-        code="FULL_STACK",
-        name="Full-Stack RGB",
-        subtitle="Tríade Completa + Soda",
+        id="entardecer-tropical",
+        code="ENTARDECER",
+        name="Entardecer Tropical",
+        subtitle="Coquetel Completo das 4 Frutas",
         description=(
-            "As quatro bombas trabalhando em harmonia: notas cítricas, frutas "
-            "vermelhas e maçã verde equilibradas ao mililitro."
+            "Todas as notas tropicais do bar em equilíbrio: cítricos dourados, "
+            "morango silvestre, maçã verde e soda cristalina."
         ),
-        category="Autorais ESP32",
-        badge="4 Bombas",
-        accent_from="#8b5cf6",
-        accent_to="#ec4899",
-        glass_color="#c084fc",
+        category="Especiais Tropicais",
+        badge="Assinatura Tropical",
+        accent_from="#f97316",
+        accent_to="#db2777",
+        glass_color="#fb7185",
         steps=[
             DoseStep(pump="amarelo", ml=35, pause_ms=1000),
             DoseStep(pump="vermelho", ml=40, pause_ms=1000),

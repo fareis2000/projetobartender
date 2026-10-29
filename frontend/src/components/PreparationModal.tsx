@@ -26,12 +26,12 @@ export const PreparationModal: React.FC<PreparationModalProps> = ({
   const isError = status.state === 'error';
 
   const activePumpColor = status.current_pump
-    ? pumpsById[status.current_pump]?.color_hex ?? '#f59e0b'
+    ? pumpsById[status.current_pump]?.color_hex ?? '#ea580c'
     : null;
 
   const displayLayers = [
     {
-      color: activePumpColor ?? (isCompleted ? '#10b981' : '#f59e0b'),
+      color: activePumpColor ?? (isCompleted ? '#10b981' : '#f97316'),
       ml: Math.max(15, status.progress * 3.5),
     },
   ];
@@ -40,26 +40,26 @@ export const PreparationModal: React.FC<PreparationModalProps> = ({
     status.transport === 'wifi'
       ? 'ESP32 via Wi-Fi'
       : status.transport === 'serial'
-        ? 'ESP32 via USB Serial'
-        : 'Simulador em Tempo Real';
+        ? 'ESP32 via Cabo USB'
+        : 'Demonstração ao Vivo';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
-      <div className="w-full max-w-md rounded-3xl bg-[#11131d] border border-white/15 p-7 shadow-2xl text-center space-y-5">
-        {/* Tag de canal */}
-        <div className="flex items-center justify-between text-xs text-slate-400">
-          <span className="px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#2d1810]/45 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[32px] bg-[#fffaf2] border-2 border-[#ebd0b2] p-7 shadow-2xl text-center space-y-5">
+        {/* Topo informativo */}
+        <div className="flex items-center justify-between text-xs font-medium text-[#7c533d]">
+          <span className="px-3 py-1 rounded-full bg-[#f8ebd8] border border-[#e6c8a5]">
             {transportLabel}
           </span>
           {status.total_seconds > 0 && (
             <span>
-              {status.elapsed_seconds.toFixed(1)}s / ~{status.total_seconds.toFixed(1)}s
+              {status.elapsed_seconds.toFixed(1)}s de ~{status.total_seconds.toFixed(1)}s
             </span>
           )}
         </div>
 
-        {/* Visual central */}
-        <div className="flex flex-col items-center justify-center py-2">
+        {/* Copo animado recebendo a bebida */}
+        <div className="flex flex-col items-center justify-center py-3 rounded-3xl bg-gradient-to-b from-[#fff3df] to-[#ffe6c4] border border-[#edd2b2]">
           <GlassArtwork
             layers={displayLayers}
             fillOverridePercent={isCompleted ? 92 : status.progress}
@@ -68,69 +68,74 @@ export const PreparationModal: React.FC<PreparationModalProps> = ({
           />
         </div>
 
-        {/* Título e mensagem */}
+        {/* Mensagem principal */}
         <div className="space-y-1.5">
           {isCompleted && (
-            <div className="inline-flex items-center gap-1.5 text-emerald-400 text-sm font-semibold">
+            <div className="inline-flex items-center gap-1.5 text-[#15803d] text-sm font-bold">
               <PartyPopper className="w-4 h-4" />
-              <span>Drink Pronto!</span>
+              <span>Saúde! Seu drink está servido!</span>
             </div>
           )}
           {(isStopped || isError) && (
-            <div className="inline-flex items-center gap-1.5 text-rose-400 text-sm font-semibold">
+            <div className="inline-flex items-center gap-1.5 text-rose-600 text-sm font-bold">
               <XCircle className="w-4 h-4" />
-              <span>{isStopped ? 'Preparo Interrompido' : 'Falha na Comunicação'}</span>
+              <span>{isStopped ? 'Preparo Interrompido' : 'Ops! Falha na Conexão'}</span>
             </div>
           )}
 
-          <h3 className="font-display text-2xl font-bold text-white">
+          <h3 className="font-display text-2xl font-bold text-[#2d1810]">
             {status.drink_name ?? 'Preparando Drink'}
           </h3>
-          <p className="text-sm text-slate-300">{status.message}</p>
+          <p className="text-sm text-[#69432e]">{status.message}</p>
         </div>
 
         {/* Barra de Progresso */}
         <div className="space-y-2">
-          <div className="h-3 w-full rounded-full bg-white/[0.08] overflow-hidden">
+          <div className="h-3.5 w-full rounded-full bg-[#f2e2cd] overflow-hidden p-0.5">
             <div
               className="h-full rounded-full transition-all duration-300"
               style={{
                 width: `${status.progress}%`,
-                backgroundColor: isError || isStopped ? '#f43f5e' : isCompleted ? '#10b981' : (activePumpColor ?? '#f59e0b'),
+                backgroundColor:
+                  isError || isStopped
+                    ? '#e11d48'
+                    : isCompleted
+                      ? '#16a34a'
+                      : (activePumpColor ?? '#f97316'),
               }}
             />
           </div>
-          <div className="flex justify-between text-xs text-slate-400">
+          <div className="flex justify-between text-xs font-medium text-[#7c533d]">
             <span>
               {status.current_pump
-                ? `Ativa: ${pumpsById[status.current_pump]?.label ?? status.current_pump}`
+                ? `Servindo: ${pumpsById[status.current_pump]?.ingredient ?? status.current_pump}`
                 : isCompleted
-                  ? 'Finalizado com sucesso'
-                  : 'Aguardando etapa'}
+                  ? 'Pronto para retirar'
+                  : 'Aguarde um instante'}
             </span>
-            <strong className="font-display text-white">{status.progress}%</strong>
+            <strong className="font-bold text-[#2d1810]">{status.progress}%</strong>
           </div>
         </div>
 
-        {/* Ações */}
-        <div className="pt-2">
+        {/* Botão de ação */}
+        <div className="pt-1">
           {isDispensing ? (
             <button
               type="button"
               onClick={onEmergencyStop}
-              className="w-full py-3 px-4 rounded-xl font-display font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full py-3.5 px-4 rounded-2xl font-sans-ui font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 shadow-md shadow-rose-600/25 flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <OctagonAlert className="w-4 h-4" />
-              <span>Parada de Emergência (Desligar Bombas)</span>
+              <span>Parar Agora (Desligar Bombas)</span>
             </button>
           ) : (
             <button
               type="button"
               onClick={onClose}
-              className="w-full py-3 px-4 rounded-xl font-display font-bold text-sm text-slate-950 bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              className="w-full py-3.5 px-4 rounded-2xl font-sans-ui font-bold text-sm text-white bg-gradient-to-r from-[#ea580c] to-[#f97316] hover:brightness-105 shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Concluir</span>
+              <span>Fechar e Aproveitar</span>
             </button>
           )}
         </div>
@@ -138,4 +143,3 @@ export const PreparationModal: React.FC<PreparationModalProps> = ({
     </div>
   );
 };
-

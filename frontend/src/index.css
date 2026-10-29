@@ -3,13 +3,24 @@
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    background-color: #08090e;
-    color: #f1f5f9;
+    color: #2d1810;
+    background-color: #fff8ed;
+    background-image:
+      radial-gradient(circle at 50% 0%, rgba(255, 214, 138, 0.55) 0%, rgba(255, 166, 98, 0.14) 45%, transparent 72%),
+      radial-gradient(circle at 92% 28%, rgba(255, 130, 92, 0.18) 0%, transparent 48%),
+      radial-gradient(circle at 6% 65%, rgba(16, 185, 129, 0.12) 0%, transparent 45%),
+      linear-gradient(180deg, #fffaf2 0%, #fff1db 48%, #ffe4c4 100%);
+    background-attachment: fixed;
     overflow-x: hidden;
   }
 
   h1, h2, h3, .font-display {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: 'Fraunces', Georgia, serif;
+    letter-spacing: -0.015em;
+  }
+
+  .font-sans-ui {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
   }
 }
 
@@ -19,55 +30,93 @@
     opacity: 0;
   }
   25% {
-    opacity: 0.7;
+    opacity: 0.8;
   }
   100% {
-    transform: translateY(-48px) scale(1.15);
+    transform: translateY(-52px) scale(1.18);
     opacity: 0;
   }
 }
 
 @keyframes pulseStream {
   0%, 100% {
-    opacity: 0.75;
+    opacity: 0.78;
   }
   50% {
     opacity: 1;
   }
 }
 
+@keyframes breezeLeft {
+  0%, 100% {
+    transform: rotate(0deg) translateY(0px);
+  }
+  50% {
+    transform: rotate(2.5deg) translateY(4px);
+  }
+}
+
+@keyframes breezeRight {
+  0%, 100% {
+    transform: rotate(0deg) translateY(0px);
+  }
+  50% {
+    transform: rotate(-2.8deg) translateY(5px);
+  }
+}
+
 .bubble-rise {
-  animation: floatBubble 2.6s ease-in infinite;
+  animation: floatBubble 2.5s ease-in infinite;
 }
 
 .stream-flow {
-  animation: pulseStream 0.9s ease-in-out infinite;
+  animation: pulseStream 0.85s ease-in-out infinite;
 }
 
-/* Customização sutil dos sliders de ml */
+.palm-sway-left {
+  transform-origin: top left;
+  animation: breezeLeft 7s ease-in-out infinite;
+}
+
+.palm-sway-right {
+  transform-origin: top right;
+  animation: breezeRight 8s ease-in-out infinite;
+}
+
+/* Textura orgânica sutil de papel algodão / cardápio de praia */
+.linen-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 250, 242, 0.82) 100%);
+  box-shadow:
+    0 20px 45px -18px rgba(145, 72, 24, 0.16),
+    0 2px 6px rgba(145, 72, 24, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* Sliders de dosagem com visual orgânico e quente */
 input[type="range"].pump-slider {
   -webkit-appearance: none;
   appearance: none;
-  height: 8px;
+  height: 10px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: #f3e2cc;
+  box-shadow: inset 0 1px 3px rgba(95, 50, 20, 0.14);
   outline: none;
 }
 
 input[type="range"].pump-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 9999px;
-  background: #ffffff;
-  border: 3px solid var(--slider-accent, #f59e0b);
-  box-shadow: 0 0 14px rgba(0, 0, 0, 0.55);
+  background: #fffdf9;
+  border: 4px solid var(--slider-accent, #ea580c);
+  box-shadow: 0 3px 10px rgba(95, 50, 20, 0.25);
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 input[type="range"].pump-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
+  transform: scale(1.14);
+  box-shadow: 0 5px 14px rgba(95, 50, 20, 0.32);
 }
-
