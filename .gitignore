@@ -1,11 +1,20 @@
-# Python
+# ==========================================
+# ARQUIVOS DE SEGURANÇA E CREDENCIAIS (NUNCA VERSIONAR)
+# ==========================================
+bombas/secrets.h
+**/secrets.h
+.env
+.env.*
+!.env.example
+!backend/.env.example
+
+# Python / Backend
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 env/
-.env
 backend/data/
 
 # Node / Frontend
@@ -15,9 +24,8 @@ frontend/.vite/
 *.tsbuildinfo
 *.log
 
-# OS / IDE
+# Sistema / IDEs
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-

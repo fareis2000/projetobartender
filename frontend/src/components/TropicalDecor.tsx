@@ -129,3 +129,4 @@ export const TropicalHeroArt: React.FC = () => {
     </div>
   );
 };
+

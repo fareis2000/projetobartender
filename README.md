@@ -142,18 +142,20 @@ projetobartender/
 
 ---
 
-### Etapa 1: Gravar o Firmware no ESP32
+### Etapa 1: Configurar Senhas com Segurança e Gravar no ESP32
 
-1. Abra o arquivo **`bombas/bombas.ino`** na **Arduino IDE**.
+> 🔒 **Segurança de Credenciais:** As senhas do Wi-Fi e tokens ficam separadas nos arquivos privados **`bombas/secrets.h`** (para o ESP32) e **`.env`** (para o servidor Python). Ambos estão protegidos no **`.gitignore`** e nunca são enviados ao GitHub! Caso esteja clonando o repositório em outro PC, basta copiar `bombas/secrets.example.h` para `bombas/secrets.h` e `backend/.env.example` para `.env`.
+
+1. Abra o arquivo **`bombas/bombas.ino`** na **Arduino IDE** (o arquivo **`secrets.h`** abrirá automaticamente como uma segunda aba ao lado!).
 2. Caso ainda não tenha o suporte a ESP32 na Arduino IDE:
    - Abra o **Boards Manager** (ícone de placas na barra lateral esquerda), pesquise por **`esp32`** e instale **`esp32 by Espressif Systems`**.
    - *(Não é necessário instalar nenhuma biblioteca adicional — todas já são nativas).*
-3. Nas linhas **26 e 27** de `bombas.ino`, digite o nome e a senha da sua rede **Wi-Fi 2.4 GHz**:
+3. Na aba **`secrets.h`** (`bombas/secrets.h`), preencha o nome e a senha da sua rede **Wi-Fi 2.4 GHz**:
    ```cpp
-   const char* WIFI_SSID     = "NOME_DO_SEU_WIFI_2.4G";
-   const char* WIFI_PASSWORD = "SENHA_DO_SEU_WIFI";
+   #define SECRET_WIFI_SSID      "NOME_DO_SEU_WIFI_2.4G"
+   #define SECRET_WIFI_PASSWORD  "SENHA_DO_SEU_WIFI"
    ```
-   > **Nota:** Caso o ESP32 não encontre esse Wi-Fi em 10 segundos (ex.: em uma feira ou evento sem roteador), ele cria automaticamente uma rede Wi-Fi própria chamada **`Bartender-ESP32`** (senha **`12345678`**, IP **`192.168.4.1`**)!
+   > **Nota:** Caso o ESP32 não encontre esse Wi-Fi em 10 segundos (ex.: em uma feira ou evento sem roteador), ele cria automaticamente a rede Wi-Fi reserva configurada em `SECRET_AP_SSID` (**`Bartender-ESP32`**, IP **`192.168.4.1`**)! Você também pode definir um `SECRET_API_TOKEN` opcional (igual ao `ESP32_API_TOKEN` do arquivo `.env`) para exigir autenticação HTTP na rede.
 4. Conecte o ESP32 ao computador usando um **cabo USB de dados**.
 5. Em **Tools → Board → esp32**, selecione **`ESP32 Dev Module`** (ou `DOIT ESP32 DEVKIT V1`).
 6. Em **Tools → Port**, selecione a porta `COM` correspondente (ex.: `COM3`, `COM4`).

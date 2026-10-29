@@ -22,14 +22,27 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 
+// Carrega senhas e chaves privadas de bombas/secrets.h (ignorado no Git)
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  #warning "bombas/secrets.h nao encontrado! Copie secrets.example.h para secrets.h e preencha seu Wi-Fi."
+  #define SECRET_WIFI_SSID      ""
+  #define SECRET_WIFI_PASSWORD  ""
+  #define SECRET_AP_SSID        "Bartender-ESP32"
+  #define SECRET_AP_PASSWORD    "12345678"
+  #define SECRET_API_TOKEN      ""
+#endif
+
 /* ================= CONFIGURAÇÃO DE REDE WI-FI ================= */
-const char* WIFI_SSID     = "SEU_WIFI_AQUI";
-const char* WIFI_PASSWORD = "SUA_SENHA_AQUI";
+const char* WIFI_SSID     = SECRET_WIFI_SSID;
+const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
 const char* MDNS_HOSTNAME = "bartender"; // http://bartender.local
 
 // Caso o Wi-Fi acima não conecte em 10s, cria ponto de acesso próprio:
-const char* AP_SSID       = "Bartender-ESP32";
-const char* AP_PASSWORD   = "12345678";
+const char* AP_SSID       = SECRET_AP_SSID;
+const char* AP_PASSWORD   = SECRET_AP_PASSWORD;
+const char* API_TOKEN     = SECRET_API_TOKEN;
 
 /* ================= PINOS SEGUROS (ESP32-WROOM-32) ============= */
 const int PIN_AMARELO  = 16; // Bomba 1 (Citrus / Amarela)
@@ -375,7 +388,14 @@ void atualizarMaquinaEstados() {
 void sendCorsHeaders() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type, X-Bartender-Token");
+}
+
+bool verificarTokenHttp() {
+  if (strlen(API_TOKEN) == 0) return true;
+  if (server.header("X-Bartender-Token") == String(API_TOKEN)) return true;
+  server.send(401, "application/json", "{\"ok\":false,\"error\":\"Token invalido ou ausente\"}");
+  return false;
 }
 
 void handleOptions() {
@@ -417,6 +437,7 @@ void handleStatus() {
 
 void handleDispense() {
   sendCorsHeaders();
+  if (!verificarTokenHttp()) return;
   if (state == STATE_DOSING || state == STATE_PAUSING || state == STATE_MELODY) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"Drink ja em preparo\"}");
     return;
@@ -458,12 +479,14 @@ void handleDispense() {
 
 void handleStop() {
   sendCorsHeaders();
+  if (!verificarTokenHttp()) return;
   paradaEmergencia();
   server.send(200, "application/json", "{\"ok\":true,\"state\":\"stopped\"}");
 }
 
 void handleConfigPumps() {
   sendCorsHeaders();
+  if (!verificarTokenHttp()) return;
   String body = server.arg("plain");
   bool changed = false;
 
@@ -571,6 +594,9 @@ void setup() {
   server.on("/stop", HTTP_OPTIONS, handleOptions);
   server.on("/config/pumps", HTTP_POST, handleConfigPumps);
   server.on("/config/pumps", HTTP_OPTIONS, handleOptions);
+
+  const char* headerKeys[] = { "X-Bartender-Token" };
+  server.collectHeaders(headerKeys, 1);
 
   server.begin();
   Serial.println("Servidor HTTP pronto na porta 80!");

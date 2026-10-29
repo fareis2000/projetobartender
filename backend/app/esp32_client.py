@@ -100,6 +100,12 @@ class ESP32Controller:
         return f"http://{self._config.esp32_host}:{self._config.esp32_port}"
 
     @staticmethod
+    def _auth_headers() -> dict[str, str]:
+        if settings.esp32_api_token:
+            return {"X-Bartender-Token": settings.esp32_api_token}
+        return {}
+
+    @staticmethod
     def list_serial_ports() -> list[str]:
         try:
             return [p.device for p in serial.tools.list_ports.comports()]
@@ -184,7 +190,7 @@ class ESP32Controller:
     async def sync_pump_rates_to_esp32(self, pumps: dict[PumpId, PumpConfig]) -> bool:
         """Sincroniza vazões calibradas (ml/s) com a memória NVS do ESP32 quando online via Wi-Fi."""
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=2.0, headers=self._auth_headers()) as client:
                 payload = {pid: cfg.flow_rate_ml_s for pid, cfg in pumps.items()}
                 resp = await client.post(f"{self._wifi_base_url()}/config/pumps", json=payload)
                 return resp.status_code == 200
@@ -233,7 +239,7 @@ class ESP32Controller:
         # Envia parada imediata ao hardware caso esteja em Wi-Fi ou Serial
         if self._status.transport == "wifi":
             try:
-                async with httpx.AsyncClient(timeout=1.5) as client:
+                async with httpx.AsyncClient(timeout=1.5, headers=self._auth_headers()) as client:
                     await client.post(f"{self._wifi_base_url()}/stop")
             except Exception:
                 pass
@@ -304,7 +310,7 @@ class ESP32Controller:
         plan_str = self.encode_plan(steps)
         start_ts = time.monotonic()
 
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(timeout=4.0, headers=self._auth_headers()) as client:
             resp = await client.post(
                 f"{self._wifi_base_url()}/dispense",
                 json={"name": drink_name, "plan": plan_str},
