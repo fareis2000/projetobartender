@@ -96,8 +96,13 @@ class ESP32Controller:
         for cb in stale:
             self._subscribers.discard(cb)
 
-    def _wifi_base_url(self) -> str:
-        return f"http://{self._config.esp32_host}:{self._config.esp32_port}"
+    def _wifi_base_url(self, use_cached_ip: bool = False) -> str:
+        host = (
+            self._last_health.wifi_ip
+            if (use_cached_ip and self._last_health.wifi_ip)
+            else self._config.esp32_host
+        )
+        return f"http://{host}:{self._config.esp32_port}"
 
     @staticmethod
     def _auth_headers() -> dict[str, str]:
@@ -122,7 +127,7 @@ class ESP32Controller:
 
         if self._config.mode in ("auto", "wifi"):
             try:
-                async with httpx.AsyncClient(timeout=1.5) as client:
+                async with httpx.AsyncClient(timeout=3.5) as client:
                     resp = await client.get(f"{self._wifi_base_url()}/status")
                     if resp.status_code == 200:
                         data = resp.json()
@@ -192,7 +197,7 @@ class ESP32Controller:
         try:
             async with httpx.AsyncClient(timeout=2.0, headers=self._auth_headers()) as client:
                 payload = {pid: cfg.flow_rate_ml_s for pid, cfg in pumps.items()}
-                resp = await client.post(f"{self._wifi_base_url()}/config/pumps", json=payload)
+                resp = await client.post(f"{self._wifi_base_url(use_cached_ip=True)}/config/pumps", json=payload)
                 return resp.status_code == 200
         except Exception:
             return False
@@ -240,7 +245,7 @@ class ESP32Controller:
         if self._status.transport == "wifi":
             try:
                 async with httpx.AsyncClient(timeout=1.5, headers=self._auth_headers()) as client:
-                    await client.post(f"{self._wifi_base_url()}/stop")
+                    await client.post(f"{self._wifi_base_url(use_cached_ip=True)}/stop")
             except Exception:
                 pass
         elif self._status.transport == "serial":
@@ -310,9 +315,10 @@ class ESP32Controller:
         plan_str = self.encode_plan(steps)
         start_ts = time.monotonic()
 
+        base_url = self._wifi_base_url(use_cached_ip=True)
         async with httpx.AsyncClient(timeout=4.0, headers=self._auth_headers()) as client:
             resp = await client.post(
-                f"{self._wifi_base_url()}/dispense",
+                f"{base_url}/dispense",
                 json={"name": drink_name, "plan": plan_str},
             )
             if resp.status_code >= 400:
@@ -323,7 +329,7 @@ class ESP32Controller:
                 if self._cancel_requested:
                     return
                 await asyncio.sleep(0.3)
-                st_resp = await client.get(f"{self._wifi_base_url()}/status")
+                st_resp = await client.get(f"{base_url}/status")
                 data = st_resp.json()
                 esp_state = data.get("state", "idle")
                 progress = int(data.get("progress", 0))
