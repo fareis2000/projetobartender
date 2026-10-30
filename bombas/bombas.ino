@@ -1,57 +1,86 @@
 /*
  * ============================================================================
- * BARTENDER AUTOMÁTICO v2.0 — FIRMWARE ESP32 (ESP32-WROOM-32 / DevKit V1)
+ * BARTENDER AUTOMÁTICO v2.0 — FIRMWARE HÍBRIDO (ESP8266 NodeMCU & ESP32)
  * ============================================================================
  * Compatível com:
  *   1. API HTTP JSON via Wi-Fi (porta 80) + mDNS (http://bartender.local)
  *   2. Comunicação USB Serial (115200 baud) como fallback direto
  *   3. Dosagem não-bloqueante (millis) com telemetria de progresso ao vivo
  *   4. Parada de Emergência instantânea (/stop ou comando Serial STOP)
- *   5. Persistência de calibração de vazão (ml/s) em memória Flash (NVS)
+ *   5. Persistência de calibração de vazão (ml/s) em Flash (EEPROM / NVS)
  *
- * ATENÇÃO AO PINOUT DO ESP32-WROOM-32:
- *   - NUNCA utilize os GPIOs 6 a 11 (conectados à memória SPI Flash interna).
- *   - Evite GPIOs 0, 2, 5, 12, 15 em relés Active-LOW (pulsam no boot).
- *   - Se usar módulo relé óptico padrão, RELE_ATIVO_EM_LOW = true.
- *   - Se usar driver Darlington ULN2803A, altere RELE_ATIVO_EM_LOW = false.
+ * PINOUT AUTOMÁTICO POR PLACA:
+ *   [ESP8266 NodeMCU 1.0 / Wemos D1 Mini]
+ *     - D1 (GPIO 5)  -> Bomba 1 (Amarela / Citrus)
+ *     - D2 (GPIO 4)  -> Bomba 2 (Vermelha / Frutas Vermelhas)
+ *     - D5 (GPIO 14) -> Bomba 3 (Verde / Maçã Verde)
+ *     - D6 (GPIO 12) -> Bomba 4 (Azul / Base Água c/ Gás)
+ *     - D0 (GPIO 16) -> LED Antena / Indicador
+ *     - D7 (GPIO 13) -> Buzzer Passivo (melodia final)
+ *
+ *   [ESP32-WROOM-32 / DevKit V1]
+ *     - GPIO 16, 17, 18, 19 -> Bombas 1 a 4 | GPIO 21 -> LED | GPIO 22 -> Buzzer
  * ============================================================================
  */
 
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ESPmDNS.h>
-#include <Preferences.h>
+#if defined(ESP8266)
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+  #include <ESP8266mDNS.h>
+  #include <EEPROM.h>
+  using HttpServer = ESP8266WebServer;
+  const char* DEVICE_MODEL = "ESP8266-NodeMCU";
+#elif defined(ESP32)
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #include <ESPmDNS.h>
+  #include <Preferences.h>
+  using HttpServer = WebServer;
+  const char* DEVICE_MODEL = "ESP32-WROOM-32";
+#else
+  #error "Selecione uma placa ESP8266 (NodeMCU 1.0 ESP-12E) ou ESP32 no Arduino IDE."
+#endif
 
 // Carrega senhas e chaves privadas de bombas/secrets.h (ignorado no Git)
 #if __has_include("secrets.h")
-  #include "secrets.h"
+#include "secrets.h"
 #else
-  #warning "bombas/secrets.h nao encontrado! Copie secrets.example.h para secrets.h e preencha seu Wi-Fi."
-  #define SECRET_WIFI_SSID      ""
-  #define SECRET_WIFI_PASSWORD  ""
-  #define SECRET_AP_SSID        "Bartender-ESP32"
-  #define SECRET_AP_PASSWORD    "12345678"
-  #define SECRET_API_TOKEN      ""
+#warning "bombas/secrets.h nao encontrado! Copie secrets.example.h para secrets.h e preencha seu Wi-Fi."
+#define SECRET_WIFI_SSID ""
+#define SECRET_WIFI_PASSWORD ""
+#define SECRET_AP_SSID "Bartender-ESP"
+#define SECRET_AP_PASSWORD "12345678"
+#define SECRET_API_TOKEN ""
 #endif
 
 /* ================= CONFIGURAÇÃO DE REDE WI-FI ================= */
-const char* WIFI_SSID     = SECRET_WIFI_SSID;
+const char* WIFI_SSID = SECRET_WIFI_SSID;
 const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
-const char* MDNS_HOSTNAME = "bartender"; // http://bartender.local
+const char* MDNS_HOSTNAME = "bartender";  // http://bartender.local
 
 // Caso o Wi-Fi acima não conecte em 10s, cria ponto de acesso próprio:
-const char* AP_SSID       = SECRET_AP_SSID;
-const char* AP_PASSWORD   = SECRET_AP_PASSWORD;
-const char* API_TOKEN     = SECRET_API_TOKEN;
+const char* AP_SSID = SECRET_AP_SSID;
+const char* AP_PASSWORD = SECRET_AP_PASSWORD;
+const char* API_TOKEN = SECRET_API_TOKEN;
 
-/* ================= PINOS SEGUROS (ESP32-WROOM-32) ============= */
-const int PIN_AMARELO  = 16; // Bomba 1 (Citrus / Amarela)
-const int PIN_VERMELHO = 17; // Bomba 2 (Frutas Vermelhas)
-const int PIN_VERDE    = 18; // Bomba 3 (Maçã Verde)
-const int PIN_AZUL     = 19; // Bomba 4 (Base Água c/ Gás / Soda)
+/* ================= PINOS SEGUROS (ESP8266 / ESP32) ============ */
+#if defined(ESP8266)
+const int PIN_AMARELO  = 5;   // Pino D1 (GPIO 5)  — Bomba 1 (Amarela)
+const int PIN_VERMELHO = 4;   // Pino D2 (GPIO 4)  — Bomba 2 (Vermelha)
+const int PIN_VERDE    = 14;  // Pino D5 (GPIO 14) — Bomba 3 (Verde)
+const int PIN_AZUL     = 12;  // Pino D6 (GPIO 12) — Bomba 4 (Azul / Base)
 
-const int PIN_LED      = 21; // LED Antena / Indicador
-const int PIN_BUZZER   = 22; // Buzzer passivo (melodia final)
+const int PIN_LED      = 16;  // Pino D0 (GPIO 16) — LED Antena / Indicador
+const int PIN_BUZZER   = 13;  // Pino D7 (GPIO 13) — Buzzer passivo (melodia)
+#else
+const int PIN_AMARELO  = 16;  // GPIO 16 — Bomba 1 (Citrus / Amarela)
+const int PIN_VERMELHO = 17;  // GPIO 17 — Bomba 2 (Frutas Vermelhas)
+const int PIN_VERDE    = 18;  // GPIO 18 — Bomba 3 (Maçã Verde)
+const int PIN_AZUL     = 19;  // GPIO 19 — Bomba 4 (Base Água c/ Gás / Soda)
+
+const int PIN_LED      = 21;  // GPIO 21 — LED Antena / Indicador
+const int PIN_BUZZER   = 22;  // GPIO 22 — Buzzer passivo (melodia final)
+#endif
 
 const bool RELE_ATIVO_EM_LOW = true;
 
@@ -63,17 +92,17 @@ struct PumpDef {
 };
 
 PumpDef pumps[4] = {
-  { "amarelo",  PIN_AMARELO,  30.5f },
+  { "amarelo", PIN_AMARELO, 30.5f },
   { "vermelho", PIN_VERMELHO, 32.3f },
-  { "verde",    PIN_VERDE,    32.3f },
-  { "azul",     PIN_AZUL,     35.9f }
+  { "verde", PIN_VERDE, 32.3f },
+  { "azul", PIN_AZUL, 35.9f }
 };
 
 /* ================= NOTAS MUSICAIS ============================= */
 #define NOTE_REST 0
-#define NOTE_GS4  415
-#define NOTE_AS4  466
-#define NOTE_C5   523
+#define NOTE_GS4 415
+#define NOTE_AS4 466
+#define NOTE_C5 523
 
 const int MELODY_NOTES[] = {
   NOTE_C5, NOTE_C5, NOTE_C5, NOTE_C5,
@@ -117,12 +146,18 @@ bool melodyGapPhase = false;
 unsigned long melodyPhaseMs = 0;
 unsigned long melodyPhaseStart = 0;
 
-WebServer server(80);
+HttpServer server(80);
+#if defined(ESP32)
 Preferences prefs;
+#endif
 
 /* ================= CONTROLE SEGURO DOS RELÉS ================== */
-inline int nivelLigado()    { return RELE_ATIVO_EM_LOW ? LOW  : HIGH; }
-inline int nivelDesligado() { return RELE_ATIVO_EM_LOW ? HIGH : LOW;  }
+inline int nivelLigado() {
+  return RELE_ATIVO_EM_LOW ? LOW : HIGH;
+}
+inline int nivelDesligado() {
+  return RELE_ATIVO_EM_LOW ? HIGH : LOW;
+}
 
 void desligarTodasBombas() {
   for (int i = 0; i < 4; i++) {
@@ -147,7 +182,40 @@ int findPumpIndex(const String& name) {
   return -1;
 }
 
-/* ================= PERSISTÊNCIA NVS (VAZÕES) ================== */
+/* ================= PERSISTÊNCIA FLASH (VAZÕES) ================ */
+#if defined(ESP8266)
+struct EepromCalib {
+  uint32_t magic;
+  float rates[4];
+};
+const uint32_t CALIB_MAGIC = 0xBA7E2026UL;
+
+void carregarCalibracao() {
+  EEPROM.begin(sizeof(EepromCalib));
+  EepromCalib c;
+  EEPROM.get(0, c);
+  if (c.magic == CALIB_MAGIC) {
+    for (int i = 0; i < 4; i++) {
+      if (c.rates[i] > 1.0f && c.rates[i] <= 200.0f) {
+        pumps[i].flowMlPerSec = c.rates[i];
+      }
+    }
+  }
+  EEPROM.end();
+}
+
+void salvarCalibracao() {
+  EEPROM.begin(sizeof(EepromCalib));
+  EepromCalib c;
+  c.magic = CALIB_MAGIC;
+  for (int i = 0; i < 4; i++) {
+    c.rates[i] = pumps[i].flowMlPerSec;
+  }
+  EEPROM.put(0, c);
+  EEPROM.commit();
+  EEPROM.end();
+}
+#else
 void carregarCalibracao() {
   prefs.begin("bartender", true);
   for (int i = 0; i < 4; i++) {
@@ -166,6 +234,7 @@ void salvarCalibracao() {
   }
   prefs.end();
 }
+#endif
 
 /* ================= AUXILIARES DE PARSING JSON SIMPLES ========= */
 String extractJsonString(const String& body, const char* key) {
@@ -291,10 +360,10 @@ const char* stateToString() {
   switch (state) {
     case STATE_DOSING:
     case STATE_PAUSING: return "dispensing";
-    case STATE_MELODY:  return "melody";
-    case STATE_DONE:    return "done";
+    case STATE_MELODY: return "melody";
+    case STATE_DONE: return "done";
     case STATE_STOPPED: return "stopped";
-    default:            return "idle";
+    default: return "idle";
   }
 }
 
@@ -338,8 +407,7 @@ void atualizarMaquinaEstados() {
       lastSerialReportMs = now;
       Serial.printf("PROGRESS:%d:%s\n", calcularProgresso(), pumps[s.pumpIdx].key);
     }
-  }
-  else if (state == STATE_PAUSING) {
+  } else if (state == STATE_PAUSING) {
     DoseStep& s = plan[currentStep];
     if (now - stateStartMs >= s.pauseMs) {
       completedMs += s.pauseMs;
@@ -352,8 +420,7 @@ void atualizarMaquinaEstados() {
         ligarBomba(plan[currentStep].pumpIdx);
       }
     }
-  }
-  else if (state == STATE_MELODY) {
+  } else if (state == STATE_MELODY) {
     if (now - melodyPhaseStart >= melodyPhaseMs) {
       if (!melodyGapPhase) {
         digitalWrite(PIN_LED, LOW);
@@ -417,7 +484,7 @@ void handleStatus() {
 
   String json = "{";
   json += "\"ok\":true,";
-  json += "\"device\":\"ESP32-WROOM-32\",";
+  json += "\"device\":\"" + String(DEVICE_MODEL) + "\",";
   json += "\"state\":\"" + String(stateToString()) + "\",";
   json += "\"drink_name\":\"" + currentDrinkName + "\",";
   json += "\"progress\":" + String(calcularProgresso()) + ",";
@@ -582,7 +649,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== Bartender Automatico ESP32 v2.0 ===");
+  Serial.printf("\n=== Bartender Automatico v2.0 (%s) ===\n", DEVICE_MODEL);
 
   carregarCalibracao();
   conectarRede();
@@ -596,14 +663,21 @@ void setup() {
   server.on("/config/pumps", HTTP_POST, handleConfigPumps);
   server.on("/config/pumps", HTTP_OPTIONS, handleOptions);
 
+#if defined(ESP8266)
+  server.collectHeaders("X-Bartender-Token");
+#else
   const char* headerKeys[] = { "X-Bartender-Token" };
   server.collectHeaders(headerKeys, 1);
+#endif
 
   server.begin();
   Serial.println("Servidor HTTP pronto na porta 80!");
 }
 
 void loop() {
+#if defined(ESP8266)
+  MDNS.update();
+#endif
   server.handleClient();
   processarSerial();
   atualizarMaquinaEstados();
