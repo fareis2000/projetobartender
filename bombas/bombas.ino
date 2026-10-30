@@ -49,6 +49,7 @@ const int PIN_AMARELO  = 16; // Bomba 1 (Citrus / Amarela)
 const int PIN_VERMELHO = 17; // Bomba 2 (Frutas Vermelhas)
 const int PIN_VERDE    = 18; // Bomba 3 (Maçã Verde)
 const int PIN_AZUL     = 19; // Bomba 4 (Base Água c/ Gás / Soda)
+
 const int PIN_LED      = 21; // LED Antena / Indicador
 const int PIN_BUZZER   = 22; // Buzzer passivo (melodia final)
 

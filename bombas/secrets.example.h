@@ -22,3 +22,4 @@
 // Token opcional para proteger comandos HTTP no Wi-Fi (deixe "" para desativar,
 // ou coloque o mesmo valor de ESP32_API_TOKEN no arquivo .env do servidor)
 #define SECRET_API_TOKEN      ""
+

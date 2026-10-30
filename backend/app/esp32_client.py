@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import time
 from pathlib import Path
 from typing import Callable, Awaitable
@@ -104,6 +105,15 @@ class ESP32Controller:
         )
         return f"http://{host}:{self._config.esp32_port}"
 
+    async def _resolve_wifi_host(self) -> str:
+        host = self._config.esp32_host.strip()
+        if host.lower().endswith(".local"):
+            try:
+                return await asyncio.to_thread(socket.gethostbyname, host)
+            except OSError:
+                pass
+        return host
+
     @staticmethod
     def _auth_headers() -> dict[str, str]:
         if settings.esp32_api_token:
@@ -126,16 +136,25 @@ class ESP32Controller:
         detail = ""
 
         if self._config.mode in ("auto", "wifi"):
-            try:
-                async with httpx.AsyncClient(timeout=3.5) as client:
-                    resp = await client.get(f"{self._wifi_base_url()}/status")
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        wifi_ok = True
-                        wifi_ip = data.get("ip") or self._config.esp32_host
-                        wifi_rssi = data.get("rssi")
-            except Exception:
-                wifi_ok = False
+            candidates: list[str] = []
+            if self._last_health.wifi_ip:
+                candidates.append(self._last_health.wifi_ip)
+            resolved_host = await self._resolve_wifi_host()
+            if resolved_host not in candidates:
+                candidates.append(resolved_host)
+
+            async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
+                for candidate in candidates:
+                    try:
+                        resp = await client.get(f"http://{candidate}:{self._config.esp32_port}/status")
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            wifi_ok = True
+                            wifi_ip = data.get("ip") or candidate
+                            wifi_rssi = data.get("rssi")
+                            break
+                    except Exception:
+                        continue
 
         if self._config.mode in ("auto", "serial") and not wifi_ok:
             if self._serial and self._serial.is_open:
@@ -195,9 +214,10 @@ class ESP32Controller:
     async def sync_pump_rates_to_esp32(self, pumps: dict[PumpId, PumpConfig]) -> bool:
         """Sincroniza vazões calibradas (ml/s) com a memória NVS do ESP32 quando online via Wi-Fi."""
         try:
-            async with httpx.AsyncClient(timeout=2.0, headers=self._auth_headers()) as client:
+            host = self._last_health.wifi_ip or await self._resolve_wifi_host()
+            async with httpx.AsyncClient(timeout=2.5, headers=self._auth_headers(), trust_env=False) as client:
                 payload = {pid: cfg.flow_rate_ml_s for pid, cfg in pumps.items()}
-                resp = await client.post(f"{self._wifi_base_url(use_cached_ip=True)}/config/pumps", json=payload)
+                resp = await client.post(f"http://{host}:{self._config.esp32_port}/config/pumps", json=payload)
                 return resp.status_code == 200
         except Exception:
             return False
@@ -244,7 +264,7 @@ class ESP32Controller:
         # Envia parada imediata ao hardware caso esteja em Wi-Fi ou Serial
         if self._status.transport == "wifi":
             try:
-                async with httpx.AsyncClient(timeout=1.5, headers=self._auth_headers()) as client:
+                async with httpx.AsyncClient(timeout=1.5, headers=self._auth_headers(), trust_env=False) as client:
                     await client.post(f"{self._wifi_base_url(use_cached_ip=True)}/stop")
             except Exception:
                 pass
@@ -316,7 +336,7 @@ class ESP32Controller:
         start_ts = time.monotonic()
 
         base_url = self._wifi_base_url(use_cached_ip=True)
-        async with httpx.AsyncClient(timeout=4.0, headers=self._auth_headers()) as client:
+        async with httpx.AsyncClient(timeout=4.0, headers=self._auth_headers(), trust_env=False) as client:
             resp = await client.post(
                 f"{base_url}/dispense",
                 json={"name": drink_name, "plan": plan_str},

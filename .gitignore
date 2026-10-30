@@ -24,8 +24,9 @@ frontend/.vite/
 *.tsbuildinfo
 *.log
 
-# Sistema / IDEs
+# Sistema / IDEs / Build Arduino
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+bombas/build/
