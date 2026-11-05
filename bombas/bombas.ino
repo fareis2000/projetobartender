@@ -1,31 +1,22 @@
 /*
  * ============================================================================
- * BARTENDER AUTOMÁTICO v2.0 — FIRMWARE HÍBRIDO (ESP8266 NodeMCU & ESP32)
+ * BARTENDER.OS v3.0 — FIRMWARE COMERCIAL HÍBRIDO (ESP8266 NodeMCU & ESP32)
  * ============================================================================
  * Compatível com:
- *   1. API HTTP JSON via Wi-Fi (porta 80) + mDNS (http://bartender.local)
- *   2. Comunicação USB Serial (115200 baud) como fallback direto
- *   3. Dosagem não-bloqueante (millis) com telemetria de progresso ao vivo
- *   4. Parada de Emergência instantânea (/stop ou comando Serial STOP)
- *   5. Persistência de calibração de vazão (ml/s) em Flash (EEPROM / NVS)
- *
- * PINOUT AUTOMÁTICO POR PLACA:
- *   [ESP8266 NodeMCU 1.0 / Wemos D1 Mini]
- *     - D1 (GPIO 5)  -> Bomba 1 (Amarela / Citrus)
- *     - D2 (GPIO 4)  -> Bomba 2 (Vermelha / Frutas Vermelhas)
- *     - D5 (GPIO 14) -> Bomba 3 (Verde / Maçã Verde)
- *     - D6 (GPIO 12) -> Bomba 4 (Azul / Base Água c/ Gás)
- *     - D0 (GPIO 16) -> LED Antena / Indicador
- *     - D7 (GPIO 13) -> Buzzer Passivo (melodia final)
- *
- *   [ESP32-WROOM-32 / DevKit V1]
- *     - GPIO 16, 17, 18, 19 -> Bombas 1 a 4 | GPIO 21 -> LED | GPIO 22 -> Buzzer
+ *   1. Sincronização IoT Nuvem (/api/iot/<slug>/sync) usando apenas o Wi-Fi
+ *      local do Bar (cliente pede no 4G próprio sem conectar no Wi-Fi do bar!)
+ *   2. API HTTP JSON local via Wi-Fi (porta 80) + mDNS (http://bartender.local)
+ *   3. Comunicação USB Serial (115200 baud) como fallback direto
+ *   4. Dosagem não-bloqueante (millis) com proteção de precisão milimétrica
+ *   5. Parada de Emergência instantânea e calibração persistente em Flash
  * ============================================================================
  */
 
 #if defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESP8266WebServer.h>
+  #include <ESP8266HTTPClient.h>
+  #include <WiFiClientSecureBearSSL.h>
   #include <ESP8266mDNS.h>
   #include <EEPROM.h>
   using HttpServer = ESP8266WebServer;
@@ -33,6 +24,8 @@
 #elif defined(ESP32)
   #include <WiFi.h>
   #include <WebServer.h>
+  #include <HTTPClient.h>
+  #include <WiFiClientSecure.h>
   #include <ESPmDNS.h>
   #include <Preferences.h>
   using HttpServer = WebServer;
@@ -51,35 +44,38 @@
 #define SECRET_AP_SSID "Bartender-ESP"
 #define SECRET_AP_PASSWORD "12345678"
 #define SECRET_API_TOKEN ""
+#define SECRET_CLOUD_SYNC_URL ""
+#endif
+
+#ifndef SECRET_CLOUD_SYNC_URL
+#define SECRET_CLOUD_SYNC_URL ""
 #endif
 
 /* ================= CONFIGURAÇÃO DE REDE WI-FI ================= */
 const char* WIFI_SSID = SECRET_WIFI_SSID;
 const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
-const char* MDNS_HOSTNAME = "bartender";  // http://bartender.local
+const char* MDNS_HOSTNAME = "bartender";
 
-// Caso o Wi-Fi acima não conecte em 10s, cria ponto de acesso próprio:
 const char* AP_SSID = SECRET_AP_SSID;
 const char* AP_PASSWORD = SECRET_AP_PASSWORD;
 const char* API_TOKEN = SECRET_API_TOKEN;
+const char* CLOUD_SYNC_URL = SECRET_CLOUD_SYNC_URL;
 
 /* ================= PINOS SEGUROS (ESP8266 / ESP32) ============ */
 #if defined(ESP8266)
-const int PIN_AMARELO  = 5;   // Pino D1 (GPIO 5)  — Bomba 1 (Amarela)
-const int PIN_VERMELHO = 4;   // Pino D2 (GPIO 4)  — Bomba 2 (Vermelha)
-const int PIN_VERDE    = 14;  // Pino D5 (GPIO 14) — Bomba 3 (Verde)
-const int PIN_AZUL     = 12;  // Pino D6 (GPIO 12) — Bomba 4 (Azul / Base)
-
-const int PIN_LED      = 16;  // Pino D0 (GPIO 16) — LED Antena / Indicador
-const int PIN_BUZZER   = 13;  // Pino D7 (GPIO 13) — Buzzer passivo (melodia)
+const int PIN_AMARELO  = 5;   // Pino D1 (GPIO 5)
+const int PIN_VERMELHO = 4;   // Pino D2 (GPIO 4)
+const int PIN_VERDE    = 14;  // Pino D5 (GPIO 14)
+const int PIN_AZUL     = 12;  // Pino D6 (GPIO 12)
+const int PIN_LED      = 16;  // Pino D0 (GPIO 16)
+const int PIN_BUZZER   = 13;  // Pino D7 (GPIO 13)
 #else
-const int PIN_AMARELO  = 16;  // GPIO 16 — Bomba 1 (Citrus / Amarela)
-const int PIN_VERMELHO = 17;  // GPIO 17 — Bomba 2 (Frutas Vermelhas)
-const int PIN_VERDE    = 18;  // GPIO 18 — Bomba 3 (Maçã Verde)
-const int PIN_AZUL     = 19;  // GPIO 19 — Bomba 4 (Base Água c/ Gás / Soda)
-
-const int PIN_LED      = 21;  // GPIO 21 — LED Antena / Indicador
-const int PIN_BUZZER   = 22;  // GPIO 22 — Buzzer passivo (melodia final)
+const int PIN_AMARELO  = 16;  // GPIO 16
+const int PIN_VERMELHO = 17;  // GPIO 17
+const int PIN_VERDE    = 18;  // GPIO 18
+const int PIN_AZUL     = 19;  // GPIO 19
+const int PIN_LED      = 21;  // GPIO 21
+const int PIN_BUZZER   = 22;  // GPIO 22
 #endif
 
 const bool RELE_ATIVO_EM_LOW = true;
@@ -139,8 +135,8 @@ unsigned long stateStartMs = 0;
 unsigned long planTotalMs = 0;
 unsigned long completedMs = 0;
 unsigned long lastSerialReportMs = 0;
+unsigned long lastCloudSyncMs = 0;
 
-// Controle não-bloqueante da melodia
 int melodyIdx = 0;
 bool melodyGapPhase = false;
 unsigned long melodyPhaseMs = 0;
@@ -452,7 +448,111 @@ void atualizarMaquinaEstados() {
   }
 }
 
-/* ================= ROTAS HTTP (WI-FI JSON API) ================ */
+/* ================= SINCRONIZAÇÃO NUVEM IOT (WI-FI DO BAR) ===== */
+void sincronizarNuvemIoT() {
+  if (strlen(CLOUD_SYNC_URL) == 0 || WiFi.status() != WL_CONNECTED) return;
+
+  unsigned long now = millis();
+  unsigned long interval = (state == STATE_DOSING || state == STATE_PAUSING) ? 450UL : 800UL;
+  if (now - lastCloudSyncMs < interval) return;
+
+  // Proteção milimétrica: se faltar menos de 450ms para desligar uma bomba ativa, espera desligar antes de fazer I/O HTTP!
+  if (state == STATE_DOSING && currentStep < planCount) {
+    unsigned long elapsedStep = now - stateStartMs;
+    if (plan[currentStep].pourMs <= elapsedStep + 450UL) {
+      return;
+    }
+  }
+  if (state == STATE_MELODY) return;
+
+  lastCloudSyncMs = now;
+
+  String curPump = "";
+  if (state == STATE_DOSING && currentStep < planCount) {
+    curPump = pumps[plan[currentStep].pumpIdx].key;
+  }
+
+  String reqJson = "{";
+  reqJson += "\"state\":\"" + String(stateToString()) + "\",";
+  reqJson += "\"progress\":" + String(calcularProgresso()) + ",";
+  reqJson += "\"current_pump\":\"" + curPump + "\",";
+  reqJson += "\"step\":" + String(currentStep + 1) + ",";
+  reqJson += "\"total_steps\":" + String(planCount) + ",";
+  reqJson += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  reqJson += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  reqJson += "\"device\":\"" + String(DEVICE_MODEL) + "\"";
+  reqJson += "}";
+
+  String urlStr = String(CLOUD_SYNC_URL);
+  HTTPClient http;
+  http.setTimeout(1200);
+  int httpCode = -1;
+  String respBody = "";
+
+  if (urlStr.startsWith("https://")) {
+#if defined(ESP8266)
+    BearSSL::WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    if (http.begin(secureClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", API_TOKEN);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+#else
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    if (http.begin(secureClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", API_TOKEN);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+#endif
+  } else {
+    WiFiClient plainClient;
+    if (http.begin(plainClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", API_TOKEN);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+  }
+
+  // Após reportar STATE_DONE uma vez para a nuvem, retorna suavemente p/ IDLE aguardando o próximo pedido
+  if (httpCode == 200 && state == STATE_DONE) {
+    state = STATE_IDLE;
+  }
+
+  if (httpCode != 200 || respBody.length() == 0) return;
+
+  String cmd = extractJsonString(respBody, "command");
+  if (cmd == "stop") {
+    paradaEmergencia();
+  } else if (cmd == "dispense" && state != STATE_DOSING && state != STATE_PAUSING) {
+    String dName = extractJsonString(respBody, "drink_name");
+    String planStr = extractJsonString(respBody, "plan");
+    if (planStr.length() > 0 && parsePlanString(planStr)) {
+      currentDrinkName = (dName.length() > 0) ? dName : "Drink App";
+      iniciarPlano();
+    }
+  } else if (cmd == "update_pumps") {
+    bool changed = false;
+    for (int i = 0; i < 4; i++) {
+      float val = extractJsonFloat(respBody, pumps[i].key, -1.0f);
+      if (val > 1.0f && val <= 200.0f) {
+        pumps[i].flowMlPerSec = val;
+        changed = true;
+      }
+    }
+    if (changed) salvarCalibracao();
+  }
+}
+
+/* ================= ROTAS HTTP (WI-FI JSON API LOCAL) ========== */
 void sendCorsHeaders() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -523,7 +623,6 @@ void handleDispense() {
   } else if (preset.length() > 0) {
     ok = carregarPreset(preset);
   } else {
-    // Suporte direto a JSON com volumes por bomba: {"amarelo":50,"azul":200}
     String built = "";
     for (int i = 0; i < 4; i++) {
       float v = extractJsonFloat(body, pumps[i].key, 0.0f);
@@ -636,7 +735,6 @@ void conectarRede() {
 }
 
 void setup() {
-  // Pré-carrega nível DESLIGADO antes do pinMode para evitar pulsos nos relés no boot
   for (int i = 0; i < 4; i++) {
     digitalWrite(pumps[i].pin, nivelDesligado());
     pinMode(pumps[i].pin, OUTPUT);
@@ -649,7 +747,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(200);
-  Serial.printf("\n=== Bartender Automatico v2.0 (%s) ===\n", DEVICE_MODEL);
+  Serial.printf("\n=== Bartender.OS v3.0 Comercial (%s) ===\n", DEVICE_MODEL);
 
   carregarCalibracao();
   conectarRede();
@@ -672,6 +770,9 @@ void setup() {
 
   server.begin();
   Serial.println("Servidor HTTP pronto na porta 80!");
+  if (strlen(CLOUD_SYNC_URL) > 0) {
+    Serial.printf("Cloud IoT Sync ativo -> %s\n", CLOUD_SYNC_URL);
+  }
 }
 
 void loop() {
@@ -681,4 +782,5 @@ void loop() {
   server.handleClient();
   processarSerial();
   atualizarMaquinaEstados();
+  sincronizarNuvemIoT();
 }

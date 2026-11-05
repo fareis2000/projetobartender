@@ -8,14 +8,18 @@ bombas/secrets.h
 !.env.example
 !backend/.env.example
 
-# Python / Backend
+# Python / Backend / SQLite
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 env/
+.pytest_cache/
 backend/data/
+*.db
+*.db-shm
+*.db-wal
 
 # Node / Frontend
 node_modules/

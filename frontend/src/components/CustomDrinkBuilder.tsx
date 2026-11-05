@@ -1,90 +1,106 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  Citrus,
   Clock,
   Droplets,
   Minus,
   Plus,
+  QrCode,
   RotateCcw,
   Sparkles,
+  Wine,
 } from 'lucide-react';
-import type { CustomDrinkPayload, PumpConfig, PumpId } from '../types/bartender';
+import type { PumpId, PumpSlot } from '../types/bartender';
+import { formatBrl, formatPerMl } from '../utils/format';
 import { GlassArtwork } from './GlassArtwork';
 
 interface CustomDrinkBuilderProps {
-  pumps: PumpConfig[];
-  disabled: boolean;
-  onSubmitCustom: (payload: CustomDrinkPayload) => void;
+  pumps: PumpSlot[];
+  maxCupMl: number;
+  cupFeeCents: number;
+  minOrderCents: number;
+  busyCreating: boolean;
+  onSubmitCustom: (payload: {
+    name: string;
+    amarelo: number;
+    vermelho: number;
+    verde: number;
+    azul: number;
+  }) => void;
 }
 
-const MAX_CUP_ML = 450;
 const PUMP_ORDER: PumpId[] = ['amarelo', 'vermelho', 'verde', 'azul'];
-
-const QUICK_PRESETS: Array<{
-  label: string;
-  name: string;
-  volumes: Record<PumpId, number>;
-}> = [
-  {
-    label: 'Pôr do Sol Tropical (320ml)',
-    name: 'Pôr do Sol Tropical',
-    volumes: { amarelo: 60, vermelho: 40, verde: 0, azul: 220 },
-  },
-  {
-    label: 'Refresco Cítrico Verde (300ml)',
-    name: 'Refresco da Ilha',
-    volumes: { amarelo: 45, vermelho: 0, verde: 55, azul: 200 },
-  },
-  {
-    label: 'Salada de Frutas Fizz (350ml)',
-    name: 'Mix Verão Completo',
-    volumes: { amarelo: 35, vermelho: 35, verde: 35, azul: 245 },
-  },
-];
 
 export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
   pumps,
-  disabled,
+  maxCupMl,
+  cupFeeCents,
+  minOrderCents,
+  busyCreating,
   onSubmitCustom,
 }) => {
-  const [name, setName] = useState('Meu Drink de Verão');
-  const [volumes, setVolumes] = useState<Record<PumpId, number>>({
-    amarelo: 50,
-    vermelho: 40,
-    verde: 0,
-    azul: 210,
+  const [name, setName] = useState('Meu Drink Exclusivo');
+  const [volumes, setVolumes] = useState<Record<PumpId, number>>(() => {
+    const initial: Record<PumpId, number> = { amarelo: 0, vermelho: 0, verde: 0, azul: 0 };
+    for (const p of pumps) {
+      if (p.bottle_id && p.available_ml >= 50) {
+        if (p.is_mixer) {
+          initial[p.pump_id] = Math.min(200, Math.floor(p.available_ml / 5) * 5);
+        } else if (initial.amarelo === 0 && initial.vermelho === 0) {
+          initial[p.pump_id] = 50;
+        }
+      }
+    }
+    return initial;
   });
 
   const pumpsById = useMemo(() => {
-    const map = {} as Record<PumpId, PumpConfig>;
-    for (const p of pumps) map[p.id] = p;
+    const map = {} as Record<PumpId, PumpSlot>;
+    for (const p of pumps) map[p.pump_id] = p;
     return map;
   }, [pumps]);
 
   const totalMl = volumes.amarelo + volumes.vermelho + volumes.verde + volumes.azul;
-  const overLimit = totalMl > MAX_CUP_ML;
+  const overLimit = totalMl > maxCupMl;
   const underLimit = totalMl < 10;
 
-  const estimatedSeconds = useMemo(() => {
+  // Cálculo ao vivo de preço por ml idêntico ao servidor!
+  const pricing = useMemo(() => {
+    let liquidsCents = 0;
+    let isAlc = false;
     let sec = 0;
     let activeCount = 0;
+
     for (const pid of PUMP_ORDER) {
       const ml = volumes[pid];
-      if (ml > 0) {
+      const slot = pumpsById[pid];
+      if (ml > 0 && slot) {
         activeCount++;
-        const flow = pumpsById[pid]?.flow_rate_ml_s ?? 32;
-        sec += ml / flow;
+        liquidsCents += Math.round((ml * slot.price_per_liter_cents) / 1000);
+        if (slot.is_alcoholic) isAlc = true;
+        sec += ml / Math.max(slot.flow_rate_ml_s, 1);
       }
     }
-    if (activeCount > 1) {
-      sec += (activeCount - 1) * 1.2;
-    }
-    return Math.round(sec * 10) / 10;
-  }, [volumes, pumpsById]);
+    if (activeCount > 1) sec += (activeCount - 1) * 1.2;
+
+    const rawTotal = liquidsCents + cupFeeCents;
+    const finalTotal = totalMl >= 10 ? Math.max(minOrderCents, rawTotal) : 0;
+
+    return {
+      liquidsCents,
+      rawTotal,
+      finalTotal,
+      minApplied: totalMl >= 10 && rawTotal < minOrderCents,
+      isAlc,
+      estimatedSeconds: Math.round(sec * 10) / 10,
+    };
+  }, [volumes, pumpsById, cupFeeCents, minOrderCents, totalMl]);
 
   const setPumpVolume = (pid: PumpId, nextVal: number) => {
-    const clamped = Math.max(0, Math.min(350, Math.round(nextVal / 5) * 5));
+    const slot = pumpsById[pid];
+    const maxBottle = slot?.bottle_id ? Math.floor(slot.available_ml / 5) * 5 : 0;
+    const maxAllowed = Math.min(350, maxCupMl, maxBottle);
+    const clamped = Math.max(0, Math.min(maxAllowed, Math.round(nextVal / 5) * 5));
     setVolumes((prev) => ({ ...prev, [pid]: clamped }));
   };
 
@@ -92,145 +108,160 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     setVolumes({ amarelo: 0, vermelho: 0, verde: 0, azul: 0 });
   };
 
-  const handlePrepare = (e: React.FormEvent) => {
+  const layers = PUMP_ORDER.map((pid) => ({
+    color: pumpsById[pid]?.color_hex ?? '#f97316',
+    ml: volumes[pid],
+    label: pumpsById[pid]?.ingredient ?? pid,
+  }));
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (overLimit || underLimit || disabled) return;
+    if (overLimit || underLimit || busyCreating) return;
     onSubmitCustom({
       name: name.trim() || 'Drink Personalizado',
       ...volumes,
     });
   };
 
-  const layers = PUMP_ORDER.map((pid) => ({
-    color: pumpsById[pid]?.color_hex ?? '#f59e0b',
-    ml: volumes[pid],
-    label: pumpsById[pid]?.ingredient ?? pid,
-  }));
-
   return (
-    <form
-      onSubmit={handlePrepare}
-      className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start"
-    >
-      {/* Balcão de Ingredientes (Esquerda) */}
-      <div className="linen-card lg:col-span-7 space-y-6 rounded-[30px] border border-[#ebd0b2] p-6 sm:p-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#eed7bc] pb-5">
+    <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      {/* Coluna Esquerda: Sliders por Bomba com Preço por ml */}
+      <div className="lg:col-span-7 linen-card rounded-[32px] border border-[#ecd0b1] p-6 sm:p-8 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#15803d]">
-              <Citrus className="w-4 h-4" />
-              Balcão Tropical Interativo
+              <Sparkles className="w-3.5 h-3.5" />
+              Precificação Justa ao Mililitro
             </span>
-            <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#2d1810] mt-1">
-              Misture sua Receita na Medida
+            <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#2d1810] mt-0.5">
+              Monte seu Drink na Medida
             </h2>
           </div>
 
           <button
             type="button"
             onClick={resetAll}
-            className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-[#6e4631] bg-[#f8ebd9] hover:bg-[#f2dec3] border border-[#e5c7a3] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#f7ead8] hover:bg-[#efe0ca] text-[#69432e] transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            Esvaziar Copo
+            Zerar Copo
           </button>
         </div>
 
-        {/* Nome da Bebida + Combinações Sugeridas */}
-        <div className="space-y-3">
-          <label className="block text-xs font-bold uppercase tracking-wider text-[#7c533d]">
-            Batize o seu drink
+        <div>
+          <label className="block text-xs font-bold text-[#69432e] mb-1.5">
+            Dê um nome para sua criação (aparece no seu pedido)
           </label>
           <input
             type="text"
-            maxLength={40}
+            maxLength={45}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Ex: Brisa de Maracujá"
-            className="w-full px-4 py-3 rounded-2xl bg-white border border-[#e5c7a3] text-[#2d1810] placeholder-[#b08c74] focus:outline-none focus:border-[#ea580c] text-sm font-medium shadow-2xs"
+            className="w-full px-4 py-3 rounded-2xl bg-white border border-[#e5c7a3] text-sm font-semibold text-[#2d1810] focus:outline-none focus:border-[#ea580c]"
+            placeholder="Ex.: Mix Tropical da Mesa 4"
           />
-
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-xs font-medium text-[#7c533d] mr-1">Sugestões da casa:</span>
-            {QUICK_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => {
-                  setName(preset.name);
-                  setVolumes(preset.volumes);
-                }}
-                className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#fff6e9] hover:bg-[#ffead0] text-[#5e3925] border border-[#e7c9a6] transition-colors cursor-pointer"
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
         </div>
 
-        {/* Controles das 4 Frutas / Bombas */}
+        {/* Lista das 4 Bombas */}
         <div className="space-y-4">
           {PUMP_ORDER.map((pid) => {
-            const pump = pumpsById[pid];
-            if (!pump) return null;
-            const val = volumes[pid];
-            const maxSlider = pump.is_mixer ? 350 : 200;
+            const slot = pumpsById[pid];
+            if (!slot) return null;
+            const ml = volumes[pid];
+            const hasBottle = Boolean(slot.bottle_id) && slot.available_ml >= 5;
+            const maxForSlider = hasBottle ? Math.min(350, maxCupMl, Math.floor(slot.available_ml / 5) * 5) : 0;
+            const lineCents = Math.round((ml * slot.price_per_liter_cents) / 1000);
 
             return (
               <div
                 key={pid}
-                className="p-4 sm:p-5 rounded-2xl bg-[#fffdf9] border border-[#eed6ba] hover:border-[#dfba90] transition-colors shadow-2xs"
+                className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                  ml > 0
+                    ? 'bg-white border-[#dfa974] shadow-xs'
+                    : 'bg-[#fdf6ec]/80 border-[#ecd3b5]'
+                } ${!hasBottle ? 'opacity-55' : ''}`}
               >
-                <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="flex items-center gap-3">
                     <span
-                      className="w-4 h-4 rounded-full shadow-xs shrink-0 ring-4 ring-[#f9efe2]"
-                      style={{ backgroundColor: pump.color_hex }}
+                      className="w-4 h-4 rounded-full shrink-0 shadow-xs"
+                      style={{ backgroundColor: slot.color_hex }}
                     />
                     <div>
-                      <span className="font-display font-bold text-base text-[#2d1810] block">
-                        {pump.ingredient}
-                      </span>
-                      <p className="text-xs text-[#7c533d]">{pump.description}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm sm:text-base text-[#2d1810]">
+                          {slot.ingredient}
+                        </span>
+                        {slot.is_alcoholic && (
+                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white">
+                            <Wine className="w-2.5 h-2.5" /> +18
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[#7c533d]">
+                        {hasBottle ? (
+                          <>
+                            <strong>{formatPerMl(slot.price_per_liter_cents)}/ml</strong> · Dose 50ml:{' '}
+                            {formatBrl(Math.round((50 * slot.price_per_liter_cents) / 1000))}
+                          </>
+                        ) : (
+                          'Ingrediente esgotado ou indisponível nesta bomba'
+                        )}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0 bg-[#fdf3e6] px-3 py-1 rounded-xl border border-[#edd4b6]">
-                    <span className="font-display text-lg font-bold text-[#2d1810]">
-                      {val}
+                  <div className="text-right shrink-0">
+                    <span className="font-display text-xl font-extrabold text-[#2d1810]">
+                      {ml} <small className="text-xs font-sans-ui font-semibold">ml</small>
                     </span>
-                    <span className="text-xs font-medium text-[#7c533d] ml-1">ml</span>
+                    <span className="block text-xs font-bold text-[#15803d]">
+                      + {formatBrl(lineCents)}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setPumpVolume(pid, val - 25)}
-                    className="p-2 rounded-xl bg-[#f7e9d6] hover:bg-[#efdac0] text-[#5c3724] border border-[#e6c8a4] cursor-pointer shrink-0"
-                    title="Diminuir 25 ml"
-                  >
-                    <Minus className="w-3.5 h-3.5" />
-                  </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(5, maxForSlider)}
+                  step={5}
+                  disabled={!hasBottle}
+                  value={ml}
+                  onChange={(e) => setPumpVolume(pid, Number(e.target.value))}
+                  className="w-full accent-[#ea580c] cursor-pointer disabled:cursor-not-allowed"
+                />
 
-                  <input
-                    type="range"
-                    min={0}
-                    max={maxSlider}
-                    step={5}
-                    value={val}
-                    onChange={(e) => setPumpVolume(pid, Number(e.target.value))}
-                    style={{ '--slider-accent': pump.color_hex } as React.CSSProperties}
-                    className="pump-slider flex-1"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => setPumpVolume(pid, val + 25)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#f7e9d6] hover:bg-[#efdac0] text-[#4a2b1b] border border-[#e6c8a4] cursor-pointer shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    25ml
-                  </button>
+                <div className="flex items-center justify-between gap-2 mt-2.5">
+                  <span className="text-[11px] text-[#8a614a]">
+                    Disponível: {Math.floor(slot.available_ml)} ml
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={!hasBottle || ml <= 0}
+                      onClick={() => setPumpVolume(pid, ml - 25)}
+                      className="px-2.5 py-1 rounded-lg bg-[#f6e6cf] hover:bg-[#ecd3b3] text-xs font-bold text-[#5c3724] disabled:opacity-40 cursor-pointer"
+                    >
+                      <Minus className="w-3 h-3 inline" /> 25ml
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!hasBottle || ml >= maxForSlider}
+                      onClick={() => setPumpVolume(pid, ml + 25)}
+                      className="px-2.5 py-1 rounded-lg bg-[#f6e6cf] hover:bg-[#ecd3b3] text-xs font-bold text-[#5c3724] disabled:opacity-40 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3 inline" /> 25ml
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!hasBottle || ml >= maxForSlider}
+                      onClick={() => setPumpVolume(pid, ml + 50)}
+                      className="px-2.5 py-1 rounded-lg bg-[#ea580c]/15 hover:bg-[#ea580c]/25 text-xs font-bold text-[#b45309] disabled:opacity-40 cursor-pointer"
+                    >
+                      +50ml
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -238,91 +269,80 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
         </div>
       </div>
 
-      {/* Prévia do Copo Tropical (Direita) */}
-      <div className="linen-card lg:col-span-5 rounded-[30px] border border-[#ebd0b2] p-6 sm:p-8 lg:sticky lg:top-24 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-[#15803d] font-bold">
-              Prévia no Copo
-            </p>
-            <h3 className="font-display text-2xl font-bold text-[#2d1810]">
-              {name.trim() || 'Drink Personalizado'}
-            </h3>
-          </div>
-          <div className="text-right">
-            <span
-              className={`font-display text-2xl font-bold ${
-                overLimit ? 'text-rose-600' : 'text-[#ea580c]'
-              }`}
-            >
-              {totalMl} ml
-            </span>
-            <p className="text-xs text-[#7c533d]">Limite {MAX_CUP_ML} ml</p>
-          </div>
+      {/* Coluna Direita: Preview do Copo + Resumo Financeiro + Botão Pix */}
+      <div className="lg:col-span-5 linen-card rounded-[32px] border border-[#ecd0b1] p-6 sm:p-8 space-y-6 lg:sticky lg:top-24">
+        <div className="flex flex-col items-center justify-center py-5 rounded-3xl bg-gradient-to-b from-[#fff5e4] to-[#ffe6c4] border border-[#edd2b2]">
+          <GlassArtwork layers={layers} maxCapacityMl={maxCupMl} size="lg" />
         </div>
 
-        {/* Palco Ensolarado do Copo */}
-        <div className="py-5 flex flex-col items-center justify-center rounded-3xl bg-gradient-to-b from-[#fff4e0] via-[#ffecd1] to-[#ffe2bd] border border-[#edd1b0]">
-          <GlassArtwork layers={layers} maxCapacityMl={MAX_CUP_ML} size="lg" />
-          <div className="mt-3 flex items-center gap-4 text-xs font-medium text-[#6e4631]">
+        {/* Métricas e Subtotal */}
+        <div className="space-y-2.5 text-sm">
+          <div className="flex justify-between text-[#69432e]">
             <span className="inline-flex items-center gap-1.5">
-              <Droplets className="w-3.5 h-3.5 text-sky-600" />
-              Copo em {Math.round((totalMl / MAX_CUP_ML) * 100)}%
+              <Droplets className="w-4 h-4 text-sky-600" />
+              Volume Total no Copo
             </span>
-            <span className="inline-flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-amber-600" />
-              Pronto em ~{Math.ceil(estimatedSeconds)}s
-            </span>
-          </div>
-        </div>
-
-        {/* Barra de Proporção */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-xs font-medium text-[#6e4631]">
-            <span>Equilíbrio de sabores</span>
-            <span>{totalMl} / {MAX_CUP_ML} ml</span>
-          </div>
-          <div className="h-3 w-full rounded-full bg-[#f3e3ce] overflow-hidden flex p-0.5 gap-0.5">
-            {PUMP_ORDER.map((pid) => {
-              const ml = volumes[pid];
-              if (ml <= 0 || totalMl <= 0) return null;
-              const pct = (ml / Math.max(totalMl, MAX_CUP_ML)) * 100;
-              return (
-                <div
-                  key={pid}
-                  className="rounded-full"
-                  style={{
-                    width: `${pct}%`,
-                    backgroundColor: pumpsById[pid]?.color_hex ?? '#ea580c',
-                  }}
-                />
-              );
-            })}
+            <strong className={overLimit ? 'text-rose-600 font-bold' : 'text-[#2d1810]'}>
+              {totalMl} / {maxCupMl} ml
+            </strong>
           </div>
 
-          {overLimit && (
-            <div className="flex items-center gap-2.5 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-800 mt-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-              <span>
-                O copo comporta até {MAX_CUP_ML} ml com segurança. Diminua um pouquinho algum ingrediente!
+          <div className="flex justify-between text-[#69432e]">
+            <span className="inline-flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-amber-600" />
+              Tempo Estimado de Dosagem
+            </span>
+            <strong className="text-[#2d1810]">~{pricing.estimatedSeconds}s</strong>
+          </div>
+
+          <div className="border-t border-[#ebd0b2] pt-2.5 space-y-1.5">
+            <div className="flex justify-between text-xs text-[#7c533d]">
+              <span>Soma dos líquidos ({totalMl} ml)</span>
+              <span>{formatBrl(pricing.liquidsCents)}</span>
+            </div>
+            {cupFeeCents > 0 && (
+              <div className="flex justify-between text-xs text-[#7c533d]">
+                <span>Copo descartável + gelo</span>
+                <span>{formatBrl(cupFeeCents)}</span>
+              </div>
+            )}
+            {pricing.minApplied && (
+              <div className="flex justify-between text-xs text-amber-700 font-medium">
+                <span>Consumação mínima por copo</span>
+                <span>{formatBrl(minOrderCents)}</span>
+              </div>
+            )}
+            <div className="flex items-baseline justify-between pt-2">
+              <span className="font-bold text-base text-[#2d1810]">Total a Pagar (Pix)</span>
+              <span className="font-display text-3xl font-extrabold text-[#15803d]">
+                {formatBrl(pricing.finalTotal)}
               </span>
             </div>
-          )}
-
-          {underLimit && (
-            <p className="text-xs text-[#7c533d] pt-1">
-              Escolha pelo menos 10 ml de bebida para preparar seu drink.
-            </p>
-          )}
+          </div>
         </div>
+
+        {overLimit && (
+          <div className="flex items-center gap-2.5 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-700">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>
+              Reduza {totalMl - maxCupMl} ml para não ultrapassar o limite de segurança do copo ({maxCupMl} ml).
+            </span>
+          </div>
+        )}
 
         <button
           type="submit"
-          disabled={disabled || overLimit || underLimit}
-          className="w-full py-4 px-5 rounded-2xl font-sans-ui font-bold text-sm text-white bg-gradient-to-r from-[#15803d] via-[#0d9488] to-[#0ea5e9] hover:brightness-105 shadow-lg shadow-emerald-700/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+          disabled={overLimit || underLimit || busyCreating}
+          className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-[#15803d] to-[#0d9488] hover:brightness-105 text-white font-sans-ui font-bold text-base shadow-lg shadow-emerald-700/20 flex items-center justify-center gap-2.5 transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
         >
-          <Sparkles className="w-4 h-4" />
-          <span>Servir Minha Receita ({totalMl} ml)</span>
+          <QrCode className="w-5 h-5" />
+          <span>
+            {busyCreating
+              ? 'Gerando seu Pix...'
+              : underLimit
+                ? 'Adicione pelo menos 10 ml'
+                : `Pagar com Pix · ${formatBrl(pricing.finalTotal)}`}
+          </span>
         </button>
       </div>
     </form>

@@ -1,7 +1,9 @@
-"""Ponto de entrada unificado para iniciar o servidor FastAPI (Bartender Automático)."""
+"""Ponto de entrada unificado do Bartender.OS v3.0 (SaaS Multi-Bares + Pix + CRUD)."""
 import socket
 import sys
 import uvicorn
+
+from backend.app.config import settings
 
 
 def _get_lan_ip() -> str | None:
@@ -16,12 +18,15 @@ def _get_lan_ip() -> str | None:
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    port = settings.server_port
     lan_ip = _get_lan_ip()
-    print("=" * 60)
-    print("[Bartender v2.0] Servidor FastAPI + ESP8266 / ESP32")
-    print("[Acesso neste PC]   http://localhost:8000")
+    print("=" * 68)
+    print(f"[Bartender.OS v3.0] Plataforma Comercial Multi-Bares + Pix (Porta {port})")
+    print(f"[QR Code Máquina #01] http://localhost:{port}/m/maq-01")
+    print(f"[Painel Dono do Bar]  http://localhost:{port}/painel  (dono@bartropical.com / bar123)")
+    print(f"[Painel Super-Admin]  http://localhost:{port}/superadmin  (superadmin@bartender.os / admin123)")
     if lan_ip:
-        print(f"[Acesso no Celular] http://{lan_ip}:8000  (mesmo Wi-Fi)")
-    print("[Documentacao API]  http://localhost:8000/docs")
-    print("=" * 60)
-    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)
+        print(f"[Teste no Celular]    http://{lan_ip}:{port}/m/maq-01")
+    print(f"[Documentacao API]    http://localhost:{port}/docs")
+    print("=" * 68)
+    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=port, reload=True)
