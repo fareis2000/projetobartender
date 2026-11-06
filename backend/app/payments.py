@@ -258,7 +258,12 @@ async def create_pix_charge(
         )
 
     # Integração Real Mercado Pago Pix API (/v1/payments)
-    mp_exp = expires_at.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+    # IMPORTANTE: O Mercado Pago exige que `date_of_expiration` do Pix tenha no mínimo 30 minutos;
+    # valores menores (ex: 5 min) são aceitos no POST inicial mas cancelados/expirados assincronamente
+    # 2 segundos depois pelo motor do Mercado Pago (`status_detail: expired`), fazendo o banco pagador
+    # recusar o QR Code ("Pix não aceito pelo banco recebedor"). Usamos no mínimo 35 min (2100s) na API!
+    mp_expires_at = now + dt.timedelta(seconds=max(expiration_seconds, 2100))
+    mp_exp = mp_expires_at.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
     payload: dict[str, object] = {
         "transaction_amount": round(amount_cents / 100.0, 2),
         "description": f"Pedido #{order_number} · {drink_name} ({bar_name})"[:120],
@@ -381,3 +386,24 @@ async def refund_pix_payment(provider: str, mp_access_token: str, payment_id: st
         if resp.status_code >= 400:
             raise RuntimeError(f"Falha ao estornar no Mercado Pago ({resp.status_code}): {resp.text[:180]}")
         return True
+
+
+async def cancel_mercadopago_payment(mp_access_token: str, payment_id: str | None) -> None:
+    """Invalida proativamente um QR Code Pix pendente no Mercado Pago quando o cliente cancela o pedido."""
+    clean_token = normalize_mp_access_token(mp_access_token)
+    if not clean_token or not payment_id or payment_id.startswith("sim_"):
+        return
+    headers = {
+        "Authorization": f"Bearer {clean_token}",
+        "X-Idempotency-Key": f"cancel-{payment_id}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
+            await client.put(
+                f"https://api.mercadopago.com/v1/payments/{payment_id}",
+                json={"status": "cancelled"},
+                headers=headers,
+            )
+    except Exception:
+        pass

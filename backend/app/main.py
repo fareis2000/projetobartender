@@ -121,6 +121,7 @@ from .models import (
     PumpSlotUpdateRequest,
 )
 from .payments import (
+    cancel_mercadopago_payment,
     check_mercadopago_payment_status,
     create_pix_charge,
     generate_qr_svg_bytes,
@@ -422,7 +423,11 @@ async def cancel_order_endpoint(
     customer_session_id: str = Query(...),
 ) -> OrderOut:
     """Permite ao próprio cliente cancelar uma cobrança Pix ainda não paga (`PENDING_PAYMENT`)."""
-    return cancel_pending_order(order_id, customer_session_id)
+    cancelled = cancel_pending_order(order_id, customer_session_id)
+    if cancelled.payment_provider == "mercadopago" and cancelled.payment_external_id:
+        mp_tok = get_bar_mp_access_token(cancelled.bar_id)
+        await cancel_mercadopago_payment(mp_tok, cancelled.payment_external_id)
+    return cancelled
 
 
 @app.post("/api/public/orders/{order_id}/resume-turn", response_model=OrderOut)

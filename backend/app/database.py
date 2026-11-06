@@ -1997,17 +1997,24 @@ def resume_or_extend_customer_turn(order_id: str, customer_session_id: str) -> O
 
 
 def list_pending_mp_orders() -> list[tuple[str, str, str]]:
-    """Retorna lista de (order_id, payment_external_id, mp_access_token) aguardando confirmação."""
+    """Retorna lista de (order_id, payment_external_id, mp_access_token) aguardando confirmação.
+
+    Inclui também pedidos recém-expirados na janela visual (últimos 45 min) para reconciliar com
+    segurança caso o cliente conclua o pagamento no banco segundos após o contador local zerar.
+    """
+    cutoff_iso = (utcnow() - dt.timedelta(minutes=45)).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
             """
             SELECT o.id, o.payment_external_id, b.mp_access_token
             FROM orders o
             JOIN bars b ON b.id = o.bar_id
-            WHERE o.status = 'PENDING_PAYMENT'
+            WHERE o.status IN ('PENDING_PAYMENT', 'EXPIRED')
               AND o.payment_provider = 'mercadopago'
               AND o.payment_external_id IS NOT NULL
-            """
+              AND o.created_at >= ?
+            """,
+            (cutoff_iso,),
         ).fetchall()
         return [(r["id"], r["payment_external_id"], r["mp_access_token"]) for r in rows if r["mp_access_token"]]
 
