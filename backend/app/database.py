@@ -1,3 +1,30 @@
+"""Camada de Persistência Transacional Multi-Tenant, Precificação `R$/ml` e Fila Inteligente (SQLite WAL).
+
+Função Arquitetural e Diferenciais Comerciais:
+----------------------------------------------
+Concentra todo o esquema relacional SQLite (`WAL` + chaves estrangeiras ativas + lock
+reentrante `RLock`), regras financeiras em centavos e algoritmos de estoque/fila da
+plataforma SaaS Bartender.OS v3.0:
+
+1. **Isolamento Multi-Tenant Estrito (`bar_id`):**
+   - Sete tabelas relacionais (`platform_admins`, `bars`, `bottles`, `machines`,
+     `machine_pumps`, `drinks`, `orders`) com integridade referencial `ON DELETE CASCADE`
+     e `ON DELETE SET NULL`, garantindo que cada bar gerencie apenas seu próprio estoque,
+     cardápio, máquinas e histórico financeiro.
+2. **Engenharia de Precificação por Mililitro (`R$/ml`) e Margem Real:**
+   - Calcula automaticamente o volume líquido utilizável descontando perdas operacionais
+     (`loss_pct`), custo proporcional por `ml`, dose referência de `50 ml`, receita bruta
+     estimada da garrafa, comissão de split da plataforma (`platform_fee_cents`) e lucro
+     líquido real por pedido (`bar_net_cents - cost_total_cents`).
+3. **Reserva de Estoque em Trânsito (*In-Flight Inventory Protection*):**
+   - `_get_reserved_ml_by_pump` desconta preventivamente os mililitros de todos os pedidos já
+     pagos aguardando na fila (`PAID_QUEUED`, `READY_FOR_CUP`, `PAUSED_TURN`, `DISPENSING`),
+     impedindo *overselling* (vender o final da garrafa para dois clientes ao mesmo tempo!).
+4. **Máquina de Fila Virtual com Janela de Turno (`75s`) e Espera Protegida (`PAUSED_TURN`):**
+   - `expire_and_advance_queue` promove automaticamente o próximo cliente pago quando a
+     máquina fica livre e coloca em `PAUSED_TURN` quem demorar mais de `75s` longe do balcão,
+     mantendo a fila fluindo sem jamais confiscar o pagamento do cliente!
+"""
 from __future__ import annotations
 
 import datetime as dt
@@ -14,6 +41,7 @@ from fastapi import HTTPException
 
 from .auth import hash_password, verify_password, Principal
 from .config import settings
+from .payments import normalize_mp_access_token, validate_mp_access_token_format
 from .models import (
     BarAnalyticsOut,
     BarCreateRequest,
@@ -40,8 +68,10 @@ from .models import (
     PumpSlotUpdateRequest,
 )
 
+# Lock reentrante global que serializa transações concorrentes de threads/tasks no SQLite local
 _DB_LOCK = threading.RLock()
 
+# Metadados físicos padrão das 4 bombas (Rótulo visual, pino GPIO referência ESP32 e vazão inicial ml/s)
 DEFAULT_PUMP_META: dict[PumpId, tuple[str, int, float]] = {
     "amarelo": ("Bomba 1 · Amarela", 16, 30.5),
     "vermelho": ("Bomba 2 · Vermelha", 17, 32.3),
@@ -51,14 +81,17 @@ DEFAULT_PUMP_META: dict[PumpId, tuple[str, int, float]] = {
 
 
 def utcnow() -> dt.datetime:
+    """Retorna o instante atual com fuso horário UTC explícito (`timezone-aware`)."""
     return dt.datetime.now(dt.timezone.utc)
 
 
 def utcnow_iso() -> str:
+    """Retorna o timestamp UTC atual formatado no padrão ISO-8601 para persistência textual no SQLite."""
     return utcnow().isoformat()
 
 
 def _parse_iso(val: str | None) -> dt.datetime | None:
+    """Converte uma string ISO-8601 do banco em `datetime` UTC seguro (retorna `None` se vazia ou inválida)."""
     if not val:
         return None
     try:
@@ -72,6 +105,11 @@ def _parse_iso(val: str | None) -> dt.datetime | None:
 
 @contextmanager
 def get_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    """Gerenciador de contexto transacional SQLite com `WAL`, `foreign_keys=ON` e rollback automático.
+
+    Garante atomicidade completa (`ACID`): se qualquer validação de negócio levantar exceção no meio
+    de uma operação composta, todas as escritas pendentes sofrem `rollback()` antes de fechar a conexão.
+    """
     target = db_path or settings.db_path
     target.parent.mkdir(parents=True, exist_ok=True)
     with _DB_LOCK:
@@ -90,6 +128,17 @@ def get_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_db(db_path: Path | None = None) -> None:
+    """Cria de forma idempotente todas as tabelas/índices SQLite v3 e popula os seeds iniciais se vazio.
+
+    Tabelas provisionadas:
+    - `platform_admins`: Contas Super-Admin gestoras da plataforma SaaS.
+    - `bars`: Estabelecimentos clientes (tenants), credenciais Mercado Pago e `%` de split.
+    - `bottles`: Catálogo de garrafas/insumos precificados em `price_per_liter_cents` (`R$/ml`).
+    - `machines`: Estações físicas de autosserviço, QR slug exclusivo, taxas e telemetria IoT.
+    - `machine_pumps`: Mapeamento das 4 bombas de cada máquina, vazão `ml/s` e nível em `ml`.
+    - `drinks`: Receitas do cardápio de cada bar (`auto_ml` ou `fixed`).
+    - `orders`: Pedidos, cobranças Pix, fila virtual, confirmação de copo e auditoria financeira.
+    """
     with get_conn(db_path) as conn:
         conn.executescript(
             """
@@ -240,9 +289,31 @@ def init_db(db_path: Path | None = None) -> None:
         bar_count = conn.execute("SELECT COUNT(*) FROM bars").fetchone()[0]
         if bar_count == 0:
             _seed_demo_bar(conn)
+        else:
+            # Auto-higieniza eventuais tokens inválidos colados acidentalmente (ex: URLs ou autofill)
+            for b_row in conn.execute("SELECT id, mp_access_token FROM bars WHERE mp_access_token != ''").fetchall():
+                ok_tok, clean_tok, _ = validate_mp_access_token_format(b_row["mp_access_token"])
+                if not ok_tok:
+                    conn.execute(
+                        "UPDATE bars SET mp_access_token = '', payment_provider = 'simulated' WHERE id = ?",
+                        (b_row["id"],),
+                    )
+                elif clean_tok != b_row["mp_access_token"]:
+                    conn.execute(
+                        "UPDATE bars SET mp_access_token = ? WHERE id = ?",
+                        (clean_tok, b_row["id"]),
+                    )
 
 
 def _seed_demo_bar(conn: sqlite3.Connection) -> None:
+    """Provisiona o ambiente comercial demonstrativo (`Bar Tropical Demo` + `maq-01`) no primeiro boot.
+
+    Cria automaticamente:
+    - O estabelecimento `bar-tropical` com split de 5% e modo Pix Simulado pronto para teste imediato.
+    - 6 garrafas calibradas em `R$/ml` (4 não-alcoólicas instaladas + 2 destilados em estoque p/ troca).
+    - A estação `maq-01` (`/m/maq-01`) com taxa de copo de `R$ 1,50` e pedido mínimo de `R$ 5,00`.
+    - 4 receitas inaugurais 100% editáveis e excluíveis pelo dono do bar no `/painel`.
+    """
     now = utcnow_iso()
     bar_id = "bar-tropical"
     conn.execute(
@@ -479,6 +550,11 @@ def _seed_demo_bar(conn: sqlite3.Connection) -> None:
 # ======================== AUTHENTICATION QUERIES ========================
 
 def authenticate_user(email: str, password: str) -> Principal:
+    """Autentica credenciais contra `platform_admins` (Super-Admin) ou `bars` (Dono do Bar).
+
+    Regra Comercial: Bares com `active == 0` (inadimplentes ou suspensos pelo Super-Admin)
+    recebem bloqueio imediato `HTTP 403` no login administrativo e também na vitrine pública.
+    """
     clean_email = email.strip().lower()
     with get_conn() as conn:
         sa = conn.execute("SELECT * FROM platform_admins WHERE lower(email) = ?", (clean_email,)).fetchone()
@@ -503,6 +579,7 @@ def authenticate_user(email: str, password: str) -> Principal:
 # ======================== SUPERADMIN MULTI-BAR CRUD ========================
 
 def get_platform_overview() -> PlatformOverviewOut:
+    """Agrega os KPIs globais da rede SaaS (volume bruto transacionado, split acumulado e bares ativos)."""
     with get_conn() as conn:
         bars_rows = conn.execute("SELECT * FROM bars ORDER BY created_at DESC").fetchall()
         summaries: list[BarSummaryOut] = []
@@ -513,6 +590,7 @@ def get_platform_overview() -> PlatformOverviewOut:
 
         for b in bars_rows:
             m_cnt = conn.execute("SELECT COUNT(*) FROM machines WHERE bar_id = ?", (b["id"],)).fetchone()[0]
+            # Contabiliza apenas pedidos efetivamente pagos (exclui pendentes, expirados, cancelados e estornados)
             ord_agg = conn.execute(
                 """
                 SELECT COUNT(*) AS cnt,
@@ -562,12 +640,14 @@ def get_platform_overview() -> PlatformOverviewOut:
 
 
 def create_bar_tenant(req: BarCreateRequest) -> BarSummaryOut:
+    """Provisiona atomicamente um novo bar cliente, sua primeira máquina `cloud_iot` e as 4 bombas."""
     now = utcnow_iso()
     bar_id = f"bar-{uuid.uuid4().hex[:10]}"
     machine_id = f"mach-{uuid.uuid4().hex[:10]}"
     clean_email = req.owner_email.strip().lower()
 
     with get_conn() as conn:
+        # Garante unicidade global de slug do bar, e-mail de login e slug do QR Code da máquina
         if conn.execute("SELECT 1 FROM bars WHERE slug = ?", (req.slug,)).fetchone():
             raise HTTPException(status_code=409, detail=f"O identificador de bar '{req.slug}' já está em uso.")
         if conn.execute("SELECT 1 FROM bars WHERE lower(owner_email) = ?", (clean_email,)).fetchone():
@@ -633,6 +713,7 @@ def create_bar_tenant(req: BarCreateRequest) -> BarSummaryOut:
 
 
 def update_bar_superadmin(bar_id: str, req: BarSuperAdminUpdateRequest) -> BarSummaryOut:
+    """Atualiza parâmetros comerciais/contratuais de um bar cliente pelo painel Super-Admin."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM bars WHERE id = ?", (bar_id,)).fetchone()
         if not row:
@@ -669,6 +750,7 @@ def update_bar_superadmin(bar_id: str, req: BarSuperAdminUpdateRequest) -> BarSu
 
 
 def delete_bar_tenant(bar_id: str) -> None:
+    """Exclui um bar e todos os seus registros dependentes via `ON DELETE CASCADE`."""
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM bars WHERE id = ?", (bar_id,))
         if cur.rowcount == 0:
@@ -678,6 +760,7 @@ def delete_bar_tenant(bar_id: str) -> None:
 # ======================== BAR SETTINGS ========================
 
 def _mask_token(tok: str) -> str:
+    """Mascara credenciais sensíveis (`Access Token` Mercado Pago) exibindo apenas prefixo e sufixo."""
     clean = tok.strip()
     if not clean:
         return ""
@@ -687,6 +770,7 @@ def _mask_token(tok: str) -> str:
 
 
 def get_bar_settings(bar_id: str, base_url_fallback: str = "") -> BarSettingsOut:
+    """Carrega as configurações do estabelecimento sem expor o Access Token completo em texto puro."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM bars WHERE id = ?", (bar_id,)).fetchone()
         if not row:
@@ -707,22 +791,46 @@ def get_bar_settings(bar_id: str, base_url_fallback: str = "") -> BarSettingsOut
         )
 
 
+def get_bar_mp_access_token(bar_id: str) -> str:
+    """Recupera internamente o Access Token Mercado Pago normalizado do bar (apenas para uso do backend)."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT mp_access_token FROM bars WHERE id = ?", (bar_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Bar não encontrado.")
+        return normalize_mp_access_token(str(row["mp_access_token"] or ""))
+
+
 def update_bar_settings(bar_id: str, req: BarSettingsUpdateRequest, base_url_fallback: str = "") -> BarSettingsOut:
+    """Salva configurações Pix/Mercado Pago do bar, validando formato oficial do Access Token."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM bars WHERE id = ?", (bar_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Bar não encontrado.")
 
-        mp_tok = req.mp_access_token.strip() if req.mp_access_token is not None else row["mp_access_token"]
+        existing_tok = normalize_mp_access_token(str(row["mp_access_token"] or ""))
+        if req.mp_access_token is not None and req.mp_access_token.strip():
+            ok_tok, clean_new_tok, err_msg = validate_mp_access_token_format(req.mp_access_token)
+            if not ok_tok:
+                raise HTTPException(status_code=400, detail=err_msg)
+            mp_tok = clean_new_tok
+        else:
+            mp_tok = existing_tok
+
         wh_sec = req.mp_webhook_secret.strip() if req.mp_webhook_secret is not None else row["mp_webhook_secret"]
         pw_hash = hash_password(req.new_password) if req.new_password else row["password_hash"]
         provider = req.payment_provider if req.payment_provider is not None else row["payment_provider"]
 
-        if provider == "mercadopago" and not mp_tok:
-            raise HTTPException(
-                status_code=400,
-                detail="Informe o Access Token do Mercado Pago antes de ativar o modo Mercado Pago Real.",
-            )
+        if provider == "mercadopago":
+            ok_final, mp_tok, err_final = validate_mp_access_token_format(mp_tok)
+            if not ok_final:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        err_final
+                        if mp_tok
+                        else "Cole seu Access Token do Mercado Pago (começa com APP_USR- ou TEST-) antes de ativar o modo Mercado Pago Pix Real."
+                    ),
+                )
 
         conn.execute(
             """
@@ -746,8 +854,10 @@ def update_bar_settings(bar_id: str, req: BarSettingsUpdateRequest, base_url_fal
 # ======================== BOTTLES CRUD ========================
 
 def _row_to_bottle_out(row: sqlite3.Row, installed_count: int = 0) -> BottleOut:
+    """Calcula a engenharia financeira de uma garrafa (`usable_volume_ml`, dose `50 ml`, receita e lucro)."""
     vol = float(row["bottle_volume_ml"])
     loss = float(row["loss_pct"])
+    # Desconta perda técnica de purga/fundo para estimar faturamento e lucro conservadores reais
     usable = round(vol * (1.0 - loss / 100.0), 1)
     ppl = int(row["price_per_liter_cents"])
     cost = int(row["cost_cents"])
@@ -775,6 +885,7 @@ def _row_to_bottle_out(row: sqlite3.Row, installed_count: int = 0) -> BottleOut:
 
 
 def list_bottles(bar_id: str) -> list[BottleOut]:
+    """Lista todas as garrafas do bar contabilizando em quantas bombas cada uma está instalada."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM bottles WHERE bar_id = ? ORDER BY is_mixer ASC, name ASC",
@@ -795,6 +906,7 @@ def list_bottles(bar_id: str) -> list[BottleOut]:
 
 
 def create_bottle(bar_id: str, req: BottleCreateRequest) -> BottleOut:
+    """Insere uma nova garrafa precificada em `R$/ml` no estoque isolado do bar."""
     btl_id = f"btl-{uuid.uuid4().hex[:10]}"
     now = utcnow_iso()
     with get_conn() as conn:
@@ -825,6 +937,7 @@ def create_bottle(bar_id: str, req: BottleCreateRequest) -> BottleOut:
 
 
 def update_bottle(bar_id: str, bottle_id: str, req: BottleUpdateRequest) -> BottleOut:
+    """Atualiza atributos de uma garrafa do bar recalculando automaticamente margens e `R$/ml`."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM bottles WHERE id = ? AND bar_id = ?", (bottle_id, bar_id)).fetchone()
         if not row:
@@ -857,6 +970,7 @@ def update_bottle(bar_id: str, bottle_id: str, req: BottleUpdateRequest) -> Bott
 
 
 def delete_bottle(bar_id: str, bottle_id: str) -> None:
+    """Remove uma garrafa do catálogo do bar desacoplando bombas vinculadas via `ON DELETE SET NULL`."""
     with get_conn() as conn:
         row = conn.execute("SELECT id FROM bottles WHERE id = ? AND bar_id = ?", (bottle_id, bar_id)).fetchone()
         if not row:
@@ -868,6 +982,11 @@ def delete_bottle(bar_id: str, bottle_id: str) -> None:
 # ======================== MACHINES & PUMPS ========================
 
 def _get_reserved_ml_by_pump(conn: sqlite3.Connection, machine_id: str) -> dict[PumpId, float]:
+    """Soma os mililitros já comprometidos por pedidos pagos na fila que ainda não foram dispensados.
+
+    Garante proteção anti-*overselling*: se restam `120 ml` na garrafa e o Cliente #1 na fila já
+    pagou por `100 ml`, o Cliente #2 verá apenas `20 ml` disponíveis para venda imediata!
+    """
     reserved: dict[PumpId, float] = {p: 0.0 for p in PUMP_IDS_ORDERED}
     rows = conn.execute(
         """
@@ -889,6 +1008,7 @@ def _get_reserved_ml_by_pump(conn: sqlite3.Connection, machine_id: str) -> dict[
 
 
 def get_machine_pumps_with_bottles(conn: sqlite3.Connection, machine_id: str) -> list[PumpSlotOut]:
+    """Retorna os 4 canais de bomba da máquina enriquecidos com a garrafa instalada e volume vendável real."""
     reserved_map = _get_reserved_ml_by_pump(conn, machine_id)
     rows = conn.execute(
         """
@@ -911,6 +1031,7 @@ def get_machine_pumps_with_bottles(conn: sqlite3.Connection, machine_id: str) ->
         rem = float(r["remaining_ml"])
         min_res = float(r["min_reserve_ml"])
         in_flight = reserved_map.get(pid, 0.0)
+        # Volume vendável = restante físico - reserva de segurança anti-ar na mangueira - fila paga em trânsito
         avail = max(0.0, round(rem - min_res - in_flight, 1)) if has_bottle else 0.0
         ppl = int(r["b_ppl"] or 0) if has_bottle else 0
 
@@ -937,6 +1058,7 @@ def get_machine_pumps_with_bottles(conn: sqlite3.Connection, machine_id: str) ->
 
 
 def list_public_machines() -> list[PublicMachineSummary]:
+    """Lista o diretório público de máquinas pertencentes exclusivamente a bares com conta ativa."""
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -951,6 +1073,7 @@ def list_public_machines() -> list[PublicMachineSummary]:
 
 
 def get_machine_row_by_slug(slug: str) -> sqlite3.Row:
+    """Localiza uma máquina pelo `slug` do QR Code validando se o estabelecimento está ativo."""
     with get_conn() as conn:
         row = conn.execute(
             """
@@ -970,6 +1093,7 @@ def get_machine_row_by_slug(slug: str) -> sqlite3.Row:
 
 
 def get_machine_row_by_id(bar_id: str, machine_id: str) -> sqlite3.Row:
+    """Busca uma máquina garantindo vínculo estrito de propriedade com o `bar_id` autenticado."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM machines WHERE id = ? AND bar_id = ?", (machine_id, bar_id)).fetchone()
         if not row:
@@ -978,6 +1102,7 @@ def get_machine_row_by_id(bar_id: str, machine_id: str) -> sqlite3.Row:
 
 
 def list_bar_machine_rows(bar_id: str) -> list[sqlite3.Row]:
+    """Retorna todas as linhas de máquinas pertencentes a um bar ordenadas por data de criação."""
     with get_conn() as conn:
         return conn.execute(
             "SELECT * FROM machines WHERE bar_id = ? ORDER BY created_at ASC",
@@ -986,6 +1111,7 @@ def list_bar_machine_rows(bar_id: str) -> list[sqlite3.Row]:
 
 
 def create_machine(bar_id: str, req: MachineCreateRequest) -> sqlite3.Row:
+    """Cadastra uma nova máquina para o bar gerando credencial secreta `iot_...` e 4 slots de bomba."""
     now = utcnow_iso()
     machine_id = f"mach-{uuid.uuid4().hex[:10]}"
     with get_conn() as conn:
@@ -1026,6 +1152,7 @@ def create_machine(bar_id: str, req: MachineCreateRequest) -> sqlite3.Row:
 
 
 def update_machine(bar_id: str, machine_id: str, req: MachineUpdateRequest) -> sqlite3.Row:
+    """Atualiza taxas, limites operacionais e parâmetros de transporte físico de uma máquina do bar."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM machines WHERE id = ? AND bar_id = ?", (machine_id, bar_id)).fetchone()
         if not row:
@@ -1057,6 +1184,11 @@ def update_machine(bar_id: str, machine_id: str, req: MachineUpdateRequest) -> s
 
 
 def update_pump_slot(bar_id: str, machine_id: str, pump_id: PumpId, req: PumpSlotUpdateRequest) -> list[PumpSlotOut]:
+    """Vincula/troca a garrafa de uma bomba ou ajusta calibração (`flow_rate_ml_s`) e reserva mínima.
+
+    Comportamento Inteligente: ao espetar uma garrafa diferente sem informar `remaining_ml` manual,
+    assume automaticamente o volume cheio nominal (`bottle_volume_ml`) da nova garrafa!
+    """
     with get_conn() as conn:
         m_row = conn.execute("SELECT id FROM machines WHERE id = ? AND bar_id = ?", (machine_id, bar_id)).fetchone()
         if not m_row:
@@ -1109,6 +1241,7 @@ def update_pump_slot(bar_id: str, machine_id: str, pump_id: PumpId, req: PumpSlo
 
 
 def refill_pump_bottle(bar_id: str, machine_id: str, pump_id: PumpId, custom_ml: float | None = None) -> list[PumpSlotOut]:
+    """Reabastece a bomba para a capacidade nominal da garrafa instalada (ou volume customizado)."""
     with get_conn() as conn:
         m_row = conn.execute("SELECT id FROM machines WHERE id = ? AND bar_id = ?", (machine_id, bar_id)).fetchone()
         if not m_row:
@@ -1134,6 +1267,7 @@ def refill_pump_bottle(bar_id: str, machine_id: str, pump_id: PumpId, custom_ml:
 
 
 def record_iot_heartbeat(machine_slug: str, api_token: str, ip: str, rssi: int) -> sqlite3.Row:
+    """Autentica em tempo constante o `X-Machine-Token` do ESP e atualiza `last_seen_at`, IP e RSSI."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM machines WHERE slug = ?", (machine_slug,)).fetchone()
         if not row or not secrets.compare_digest(str(row["api_token"]), api_token.strip()):
@@ -1146,6 +1280,7 @@ def record_iot_heartbeat(machine_slug: str, api_token: str, ip: str, rssi: int) 
 
 
 def deduct_dispensed_volume(machine_id: str, steps: list[DoseStep]) -> None:
+    """Abate diretamente os mililitros dispensados de cada bomba com piso `0.0 ml`."""
     with get_conn() as conn:
         for s in steps:
             conn.execute(
@@ -1167,6 +1302,11 @@ def _compute_drink_out(
     cup_fee_cents: int,
     min_order_cents: int,
 ) -> DrinkOut:
+    """Calcula preço final, custo de CMV, margem de lucro e disponibilidade física de um drink numa máquina.
+
+    Se qualquer bomba exigida pela receita estiver sem garrafa vinculada ou com `available_ml`
+    abaixo do volume da receita, marca `available=False` informando o motivo exato para a UI!
+    """
     raw_steps = json.loads(row["steps_json"])
     steps = [DoseStep(**s) for s in raw_steps]
 
@@ -1243,6 +1383,7 @@ def _compute_drink_out(
 
 
 def _get_bottle_cost_map(conn: sqlite3.Connection, bar_id: str) -> dict[str, tuple[int, float]]:
+    """Mapeia `bottle_id -> (cost_cents, usable_volume_ml)` para apuração precisa do CMV por dose."""
     rows = conn.execute(
         "SELECT id, cost_cents, bottle_volume_ml, loss_pct FROM bottles WHERE bar_id = ?",
         (bar_id,),
@@ -1255,6 +1396,7 @@ def _get_bottle_cost_map(conn: sqlite3.Connection, bar_id: str) -> dict[str, tup
 
 
 def list_drinks_for_machine(bar_id: str, machine_id: str, only_active: bool = False) -> list[DrinkOut]:
+    """Lista os drinks do bar avaliando preços e estoque frente às garrafas instaladas em `machine_id`."""
     with get_conn() as conn:
         m_row = conn.execute("SELECT * FROM machines WHERE id = ? AND bar_id = ?", (machine_id, bar_id)).fetchone()
         if not m_row:
@@ -1281,6 +1423,7 @@ def list_drinks_for_machine(bar_id: str, machine_id: str, only_active: bool = Fa
 
 
 def list_bar_drinks(bar_id: str) -> list[DrinkOut]:
+    """Lista todas as receitas do bar para o painel administrativo usando a 1ª máquina como referência."""
     with get_conn() as conn:
         first_m = conn.execute(
             "SELECT id FROM machines WHERE bar_id = ? ORDER BY created_at ASC LIMIT 1",
@@ -1292,6 +1435,7 @@ def list_bar_drinks(bar_id: str) -> list[DrinkOut]:
 
 
 def create_drink(bar_id: str, req: DrinkCreateRequest) -> DrinkOut:
+    """Persiste uma nova receita de drink no cardápio do bar posicionando-a ao final de `sort_order`."""
     drink_id = f"drk-{uuid.uuid4().hex[:10]}"
     now = utcnow_iso()
     steps_payload = [s.model_dump() for s in req.steps]
@@ -1335,6 +1479,7 @@ def create_drink(bar_id: str, req: DrinkCreateRequest) -> DrinkOut:
 
 
 def update_drink(bar_id: str, drink_id: str, req: DrinkUpdateRequest) -> DrinkOut:
+    """Atualiza campos visuais, etapas de bombas (`steps_json`) ou precificação de um drink do bar."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM drinks WHERE id = ? AND bar_id = ?", (drink_id, bar_id)).fetchone()
         if not row:
@@ -1374,6 +1519,7 @@ def update_drink(bar_id: str, drink_id: str, req: DrinkUpdateRequest) -> DrinkOu
 
 
 def delete_drink(bar_id: str, drink_id: str) -> None:
+    """Exclui definitivamente uma receita de drink pertencente ao bar."""
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM drinks WHERE id = ? AND bar_id = ?", (drink_id, bar_id))
         if cur.rowcount == 0:
@@ -1383,6 +1529,7 @@ def delete_drink(bar_id: str, drink_id: str) -> None:
 # ======================== ORDERS & VIRTUAL QUEUE ========================
 
 def _row_to_order_out(conn: sqlite3.Connection, row: sqlite3.Row) -> OrderOut:
+    """Converte uma linha da tabela `orders` em `OrderOut` calculando posição dinâmica na fila e timers."""
     m_row = conn.execute("SELECT slug, name FROM machines WHERE id = ?", (row["machine_id"],)).fetchone()
     now = utcnow()
 
@@ -1392,6 +1539,7 @@ def _row_to_order_out(conn: sqlite3.Connection, row: sqlite3.Row) -> OrderOut:
     turn_exp = _parse_iso(row["turn_expires_at"])
     sec_turn = max(0, int((turn_exp - now).total_seconds())) if turn_exp and row["status"] == "READY_FOR_CUP" else 0
 
+    # Posição em tempo real na fila FIFO baseada em `paid_at` (quem pagou antes é atendido primeiro)
     q_pos = 0
     if row["status"] == "READY_FOR_CUP":
         q_pos = 1
@@ -1449,7 +1597,10 @@ def _row_to_order_out(conn: sqlite3.Connection, row: sqlite3.Row) -> OrderOut:
 
 
 def expire_and_advance_queue(machine_id: str) -> bool:
-    """Expira cobranças Pix vencidas, pausa turnos sem resposta em 75s e promove o próximo da fila."""
+    """Expira cobranças Pix vencidas, pausa turnos sem resposta em 75s e promove o próximo da fila.
+
+    Retorna `True` sempre que alguma transição de estado ocorrer no banco para disparar broadcast WebSocket.
+    """
     changed = False
     now = utcnow()
     now_iso = now.isoformat()
@@ -1506,6 +1657,7 @@ def expire_and_advance_queue(machine_id: str) -> bool:
 
 
 def get_machine_queue_stats(machine_id: str) -> tuple[int, str | None, int | None]:
+    """Retorna `(tamanho_da_fila, id_pedido_na_vez, numero_pedido_na_vez)` após atualizar expirações."""
     expire_and_advance_queue(machine_id)
     with get_conn() as conn:
         q_len = conn.execute(
@@ -1524,6 +1676,7 @@ def get_machine_queue_stats(machine_id: str) -> tuple[int, str | None, int | Non
 
 
 def get_active_customer_order(machine_id: str, customer_session_id: str | None) -> OrderOut | None:
+    """Recupera o pedido ativo de um celular específico (`customer_session_id`) ao reabrir a página."""
     if not customer_session_id:
         return None
     expire_and_advance_queue(machine_id)
@@ -1543,6 +1696,7 @@ def get_active_customer_order(machine_id: str, customer_session_id: str | None) 
 
 
 def get_order_by_id(order_id: str) -> OrderOut:
+    """Carrega um pedido pelo ID garantindo atualização prévia dos timers da fila da respectiva máquina."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if not row:
@@ -1563,7 +1717,15 @@ def prepare_validated_order_draft(
     custom_name: str | None,
     custom_volumes: dict[PumpId, float] | None,
 ) -> tuple[sqlite3.Row, dict[str, object]]:
-    """Valida estoque real das garrafas, calcula centavos exatos por ml e aloca número do pedido."""
+    """Valida estoque real das garrafas, calcula centavos exatos por ml e aloca número do pedido.
+
+    Regras de Negócio Aplicadas Antes de Gerar o Pix:
+    1. Cancela cobranças `PENDING_PAYMENT` antigas da mesma sessão para evitar confusão de QR Codes.
+    2. Verifica limite anti-transbordo (`total_ml <= max_cup_ml`) e disponibilidade física real
+       descontando pedidos já pagos na fila (`slot.available_ml`).
+    3. Calcula subtotal líquido, taxa de copo, pedido mínimo, custo CMV (`cost_total_cents`),
+       comissão da plataforma (`platform_fee_cents`) e receita líquida do bar (`bar_net_cents`).
+    """
     with get_conn() as conn:
         m_row = conn.execute(
             """
@@ -1683,6 +1845,7 @@ def prepare_validated_order_draft(
         platform_fee_cents = int(round(total_cents * fee_pct / 100.0))
         bar_net_cents = total_cents - platform_fee_cents
 
+        # Incrementa sequencial amigável de senha de balcão por bar (#101, #102, ...)
         ord_num = int(conn.execute("SELECT next_order_number FROM bars WHERE id = ?", (bar_id,)).fetchone()[0])
         conn.execute("UPDATE bars SET next_order_number = next_order_number + 1 WHERE id = ?", (bar_id,))
 
@@ -1711,6 +1874,7 @@ def prepare_validated_order_draft(
 
 
 def insert_pending_order(draft: dict[str, object], provider: str, ext_id: str, qr_text: str, qr_uri: str, expires_iso: str) -> OrderOut:
+    """Grava definitivamente o pedido em estado `PENDING_PAYMENT` com os dados Pix retornados pelo gateway."""
     now_iso = utcnow_iso()
     steps: list[DoseStep] = draft["steps"]  # type: ignore[assignment]
     items: list[OrderItemBreakdown] = draft["items"]  # type: ignore[assignment]
@@ -1759,7 +1923,11 @@ def insert_pending_order(draft: dict[str, object], provider: str, ext_id: str, q
 
 
 def confirm_order_payment(order_id: str) -> tuple[OrderOut, bool]:
-    """Marca pedido como pago (idempotente) e avança fila da máquina."""
+    """Marca pedido como pago (idempotente) e avança fila da máquina.
+
+    Aceita confirmar inclusive cobranças que acabaram de transicionar para `EXPIRED` caso o
+    banco do cliente tenha liquidado o Pix no limite do segundo final, evitando prejuízo ao consumidor!
+    """
     became_paid = False
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
@@ -1778,6 +1946,7 @@ def confirm_order_payment(order_id: str) -> tuple[OrderOut, bool]:
 
 
 def confirm_order_payment_by_external_id(bar_id: str, external_id: str) -> tuple[OrderOut | None, bool]:
+    """Localiza o pedido pelo ID da transação Mercado Pago (`payment_external_id`) e confirma pagamento."""
     with get_conn() as conn:
         row = conn.execute(
             "SELECT id FROM orders WHERE bar_id = ? AND payment_external_id = ?",
@@ -1789,6 +1958,7 @@ def confirm_order_payment_by_external_id(bar_id: str, external_id: str) -> tuple
 
 
 def cancel_pending_order(order_id: str, customer_session_id: str) -> OrderOut:
+    """Cancela uma cobrança Pix ainda não paga validando a propriedade da sessão do cliente."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if not row:
@@ -1802,6 +1972,11 @@ def cancel_pending_order(order_id: str, customer_session_id: str) -> OrderOut:
 
 
 def resume_or_extend_customer_turn(order_id: str, customer_session_id: str) -> OrderOut:
+    """Reinsere no topo da fila um cliente em `PAUSED_TURN` ou renova os `75s` se já estiver em `READY_FOR_CUP`.
+
+    Como `paid_at` original é preservado, ao voltar para `PAID_QUEUED` o cliente que já havia pago
+    antes recupera automaticamente a prioridade #1 assim que o preparo em andamento terminar!
+    """
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if not row:
@@ -1838,6 +2013,7 @@ def list_pending_mp_orders() -> list[tuple[str, str, str]]:
 
 
 def mark_order_dispensing(order_id: str, customer_session_id: str) -> OrderOut:
+    """Valida a posse da vez (`READY_FOR_CUP`) e a sessão do celular, transicionando para `DISPENSING`."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if not row:
@@ -1868,6 +2044,7 @@ def mark_order_dispensing(order_id: str, customer_session_id: str) -> OrderOut:
 
 
 def finalize_order_after_dispense(order_id: str, success: bool) -> None:
+    """Conclui o pedido abatendo definitivamente os `ml` das garrafas (se sucesso) e avança a fila."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if not row:
@@ -1892,6 +2069,7 @@ def finalize_order_after_dispense(order_id: str, success: bool) -> None:
 
 
 def list_bar_orders(bar_id: str, limit: int = 80) -> list[OrderOut]:
+    """Lista os últimos pedidos registrados no bar para acompanhamento operacional e financeiro."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM orders WHERE bar_id = ? ORDER BY created_at DESC LIMIT ?",
@@ -1901,6 +2079,7 @@ def list_bar_orders(bar_id: str, limit: int = 80) -> list[OrderOut]:
 
 
 def mark_order_refunded(bar_id: str, order_id: str) -> tuple[OrderOut, str, str, str | None]:
+    """Marca um pedido pago como `REFUNDED`, libera sua reserva de fila/estoque e retorna dados para o gateway."""
     with get_conn() as conn:
         row = conn.execute(
             """
@@ -1927,6 +2106,7 @@ def mark_order_refunded(bar_id: str, order_id: str) -> tuple[OrderOut, str, str,
 
 
 def retry_failed_order(bar_id: str, order_id: str) -> OrderOut:
+    """Reinsere um pedido com `FAILED_DISPENSE` na fila (`PAID_QUEUED`) sem cobrar novamente o cliente."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id = ? AND bar_id = ?", (order_id, bar_id)).fetchone()
         if not row:
@@ -1940,6 +2120,7 @@ def retry_failed_order(bar_id: str, order_id: str) -> OrderOut:
 
 
 def get_bar_analytics(bar_id: str) -> BarAnalyticsOut:
+    """Consolida o DRE operacional do bar: faturamento bruto, CMV, comissão SaaS, lucro líquido e `ml` servidos."""
     with get_conn() as conn:
         paid = conn.execute(
             """

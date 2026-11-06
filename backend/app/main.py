@@ -1,3 +1,26 @@
+""" Controlador Principal da API FastAPI e Servidor SPA — Bartender.OS v3.0 SaaS.
+
+Função Arquitetural e Diferenciais Comerciais:
+----------------------------------------------
+Expõe todos os contratos HTTP REST, Webhooks financeiros, sincronização Cloud IoT e canais
+WebSocket em tempo real da plataforma Multi-Bares, organizados em 6 camadas claras:
+
+1. **Autenticação Unificada (`/api/auth/*`):**
+   - Login único que identifica automaticamente `superadmin` ou `bar_owner` e emite JWT.
+2. **Jornada Pública Mobile do Cliente (`/api/public/*`):**
+   - Acesso instantâneo via QR Code (`/m/{machine_slug}`) sem login e sem instalar aplicativo,
+     criação de pedidos de cardápio ou personalizados (`R$/ml`), Pix Copia e Cola, fila virtual,
+     retomada de turno pausado (`resume-turn`) e trava obrigatória de confirmação de copo.
+3. **Webhook Oficial Mercado Pago (`/api/webhooks/mercadopago/{bar_id}`):**
+   - Recebe notificações assíncronas de pagamento Pix por bar e valida autenticidade na fonte.
+4. **Cloud Sync IoT Outbound (`/api/iot/{machine_slug}/sync`):**
+   - Canal leve para placas `ESP8266`/`ESP32` operarem apenas com o Wi-Fi 2.4 GHz do bar.
+5. **Painel do Dono do Bar (`/api/bar/*`) & Painel Super-Admin (`/api/superadmin/*`):**
+   - CRUD completo e isolado por `bar_id` para garrafas, receitas, máquinas, bombas, estornos
+     Pix em 1 clique, parada de emergência e gestão multi-tenant com `%` de Split SaaS.
+6. **WebSocket Tempo Real (`/api/ws/machines/{machine_slug}`) & Entrega SPA React:**
+   - Atualizações push sub-segundo e roteamento `history fallback` seguro contra *Path Traversal*.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +52,7 @@ from .database import (
     delete_drink,
     get_active_customer_order,
     get_bar_analytics,
+    get_bar_mp_access_token,
     get_bar_settings,
     get_conn,
     get_machine_pumps_with_bottles,
@@ -82,6 +106,8 @@ from .models import (
     MachinePublicContext,
     MachineRealtimeSnapshot,
     MachineUpdateRequest,
+    MpTokenTestOut,
+    MpTokenTestRequest,
     OrderCustomCreateRequest,
     OrderOut,
     OrderPresetCreateRequest,
@@ -99,11 +125,14 @@ from .payments import (
     create_pix_charge,
     generate_qr_svg_bytes,
     refund_pix_payment,
+    validate_mp_access_token_format,
+    verify_mercadopago_token,
 )
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Gerencia inicialização do banco SQLite (DDL + seeds) e workers assíncronos de manutenção."""
     init_db()
     runtime_manager.start_background_workers()
     yield
@@ -117,6 +146,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Habilita CORS para desenvolvimento local (Vite dev server) e integrações externas autorizadas
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -127,6 +157,11 @@ app.add_middleware(
 
 
 def _infer_base_url(request: Request) -> str:
+    """Resolve a URL pública base respeitando `PUBLIC_BASE_URL` ou cabeçalhos de proxy reverso (`X-Forwarded-*`).
+
+    Essencial para gerar QR Codes imprimíveis de balcão e URLs de Webhook Mercado Pago precisas
+    mesmo atrás de Cloudflare, Nginx, Caddy ou túneis HTTPS.
+    """
     if settings.public_base_url:
         return settings.public_base_url
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
@@ -135,6 +170,7 @@ def _infer_base_url(request: Request) -> str:
 
 
 async def _build_machine_out(m_row, base_url: str, probe: bool = False) -> MachineOut:
+    """Combina o registro SQLite da máquina com seu snapshot de runtime (bombas, fila e saúde IoT)."""
     machine_id = m_row["id"]
     slug = m_row["slug"]
     ex = runtime_manager.get_executor(machine_id, slug)
@@ -166,6 +202,7 @@ async def _build_machine_out(m_row, base_url: str, probe: bool = False) -> Machi
 
 @app.post("/api/auth/login", response_model=AuthTokenResponse)
 async def login(payload: LoginRequest) -> AuthTokenResponse:
+    """Autentica um Super-Admin da plataforma ou Dono de Bar e retorna o token JWT `HS256`."""
     principal = authenticate_user(payload.email, payload.password)
     token = create_access_token(principal)
     return AuthTokenResponse(
@@ -182,6 +219,7 @@ async def login(payload: LoginRequest) -> AuthTokenResponse:
 
 @app.get("/api/auth/me", response_model=PrincipalOut)
 async def me(principal: Principal = Depends(get_current_principal)) -> PrincipalOut:
+    """Valida o token Bearer atual e devolve os dados do perfil logado para restauração de sessão."""
     return PrincipalOut(
         sub=principal.sub,
         email=principal.email,
@@ -195,6 +233,7 @@ async def me(principal: Principal = Depends(get_current_principal)) -> Principal
 
 @app.get("/api/public/machines", response_model=list[PublicMachineSummary])
 async def get_public_machines_directory() -> list[PublicMachineSummary]:
+    """Lista todas as máquinas públicas de estabelecimentos ativos na plataforma."""
     return list_public_machines()
 
 
@@ -203,6 +242,12 @@ async def get_public_machine_context(
     machine_slug: str,
     session_id: str | None = Query(default=None),
 ) -> MachinePublicContext:
+    """Retorna o cardápio vivo, preços `R$/ml`, estoque das 4 bombas e pedido ativo do celular do cliente.
+
+    Chamada automaticamente quando o cliente escaneia o QR Code da máquina (`/m/{machine_slug}`)
+    e também quando retorna do aplicativo do banco (`visibilitychange`), restaurando sua posição
+    na fila através do `session_id` persistido no `localStorage` do navegador!
+    """
     m_row = get_machine_row_by_slug(machine_slug)
     machine_id = m_row["id"]
     bar_id = m_row["bar_id"]
@@ -214,7 +259,8 @@ async def get_public_machine_context(
 
     effective_provider = (
         "mercadopago"
-        if m_row["payment_provider"] == "mercadopago" and str(m_row["mp_access_token"] or "").strip()
+        if m_row["payment_provider"] == "mercadopago"
+        and validate_mp_access_token_format(str(m_row["mp_access_token"] or ""))[0]
         else "simulated"
     )
 
@@ -241,6 +287,7 @@ async def get_public_machine_context(
 
 @app.get("/api/public/m/{machine_slug}/qr.svg")
 async def download_machine_qr_svg(machine_slug: str, request: Request) -> Response:
+    """Gera e disponibiliza para download a arte vetorial `.svg` do QR Code exclusivo da máquina."""
     get_machine_row_by_slug(machine_slug)
     target_url = f"{_infer_base_url(request)}/m/{machine_slug}"
     svg_bytes = generate_qr_svg_bytes(target_url, scale=10)
@@ -253,6 +300,7 @@ async def create_preset_drink_order(
     req: OrderPresetCreateRequest,
     request: Request,
 ) -> OrderOut:
+    """Cria pedido a partir de um drink pronto do cardápio, validando estoque e gerando cobrança Pix."""
     m_row, draft = prepare_validated_order_draft(
         machine_slug=machine_slug,
         customer_session_id=req.customer_session_id,
@@ -294,6 +342,7 @@ async def create_custom_drink_order(
     req: OrderCustomCreateRequest,
     request: Request,
 ) -> OrderOut:
+    """Cria pedido personalizado por mililitro ('Monte seu Drink'), precificando cada bomba em tempo real."""
     m_row, draft = prepare_validated_order_draft(
         machine_slug=machine_slug,
         customer_session_id=req.customer_session_id,
@@ -336,6 +385,7 @@ async def create_custom_drink_order(
 
 @app.get("/api/public/orders/{order_id}", response_model=OrderOut)
 async def get_public_order_status(order_id: str) -> OrderOut:
+    """Consulta o status atualizado de um pedido e força conciliação imediata se for Mercado Pago pendente."""
     ord_out = get_order_by_id(order_id)
     # Se for Mercado Pago pendente, aproveita a consulta ao voltar do app do banco p/ checar imediatamente
     if ord_out.status == "PENDING_PAYMENT" and ord_out.payment_provider == "mercadopago" and ord_out.payment_external_id:
@@ -353,6 +403,7 @@ async def get_public_order_status(order_id: str) -> OrderOut:
 
 @app.post("/api/public/orders/{order_id}/simulate-pay", response_model=OrderOut)
 async def simulate_pix_approval(order_id: str) -> OrderOut:
+    """Simula a aprovação instantânea do pagamento Pix (disponível exclusivamente em `simulated`)."""
     ord_out = get_order_by_id(order_id)
     if ord_out.payment_provider != "simulated":
         raise HTTPException(
@@ -370,6 +421,7 @@ async def cancel_order_endpoint(
     order_id: str,
     customer_session_id: str = Query(...),
 ) -> OrderOut:
+    """Permite ao próprio cliente cancelar uma cobrança Pix ainda não paga (`PENDING_PAYMENT`)."""
     return cancel_pending_order(order_id, customer_session_id)
 
 
@@ -378,6 +430,7 @@ async def resume_order_turn_endpoint(
     order_id: str,
     customer_session_id: str = Query(...),
 ) -> OrderOut:
+    """Reativa prioritariamente no topo da fila um pedido pago que entrou em espera protegida (`PAUSED_TURN`)."""
     updated = resume_or_extend_customer_turn(order_id, customer_session_id)
     ex = runtime_manager.get_executor(updated.machine_id, updated.machine_slug)
     await ex.broadcast()
@@ -386,6 +439,15 @@ async def resume_order_turn_endpoint(
 
 @app.post("/api/public/orders/{order_id}/confirm-cup-and-dispense", response_model=OrderOut)
 async def confirm_cup_and_start_dispense(order_id: str, req: CupConfirmationRequest) -> OrderOut:
+    """Trava Crítica Anti-Desperdício: exige confirmação do copo na plataforma e aciona as bombas da máquina.
+
+    Proteções de Negócio e Segurança:
+    1. Recusa imediatamente (`400`) se `cup_on_platform_confirmed` não for `True`.
+    2. Impede furar fila (`409`): apenas o pedido na posição #1 (`READY_FOR_CUP`) e pertencente
+       ao mesmo `customer_session_id` consegue iniciar a dosagem.
+    3. Proteção Financeira: se o hardware estiver momentaneamente desconectado ao tentar partir,
+       restaura o pedido para `READY_FOR_CUP` sem jamais perder o crédito já pago pelo cliente!
+    """
     if not req.cup_on_platform_confirmed:
         raise HTTPException(
             status_code=400,
@@ -421,6 +483,7 @@ async def confirm_cup_and_start_dispense(order_id: str, req: CupConfirmationRequ
 
 @app.post("/api/webhooks/mercadopago/{bar_id}")
 async def mercadopago_webhook(bar_id: str, request: Request) -> dict[str, object]:
+    """Recebe notificações Webhook do Mercado Pago, valida autenticidade na API oficial e libera a fila."""
     body: dict[str, object] = {}
     try:
         body = await request.json()
@@ -463,6 +526,7 @@ async def iot_machine_sync(
     payload: IotSyncRequest,
     x_machine_token: str = Header(default=""),
 ) -> IotSyncResponse:
+    """Endpoint de sincronização contínua outbound acionado pelo microcontrolador ESP no Wi-Fi do bar."""
     m_row = get_machine_row_by_slug(machine_slug)
     ex = runtime_manager.get_executor(m_row["id"], machine_slug)
     return await ex.handle_iot_sync(x_machine_token, payload)
@@ -475,6 +539,7 @@ async def bar_get_settings(
     request: Request,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> BarSettingsOut:
+    """Obtém as configurações de recebimento Pix e dados cadastrais do bar autenticado."""
     return get_bar_settings(bar_id, _infer_base_url(request))
 
 
@@ -484,13 +549,39 @@ async def bar_put_settings(
     request: Request,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> BarSettingsOut:
+    """Atualiza modo Pix (`simulated` vs `mercadopago`), Access Token, segredo Webhook ou senha do bar."""
     return update_bar_settings(bar_id, req, _infer_base_url(request))
+
+
+@app.post("/api/bar/settings/test-mercadopago", response_model=MpTokenTestOut)
+async def bar_test_mercadopago(
+    req: MpTokenTestRequest,
+    bar_id: str = Depends(resolve_target_bar_id),
+) -> MpTokenTestOut:
+    """Valida ao vivo um Access Token rascunho ou já salvo consultando a API oficial do Mercado Pago."""
+    candidate = (req.mp_access_token or "").strip() or get_bar_mp_access_token(bar_id)
+    try:
+        info = await verify_mercadopago_token(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    env_label = "Modo Teste (TEST-)" if info["is_test"] else "Produção Real (APP_USR-)"
+    return MpTokenTestOut(
+        ok=True,
+        account_id=str(info["account_id"]),
+        nickname=str(info["nickname"]),
+        email=str(info["email"]),
+        first_name=str(info["first_name"]),
+        is_test=bool(info["is_test"]),
+        message=f"Conectado com sucesso à conta Mercado Pago de {info['first_name']} ({env_label})!",
+    )
 
 
 # --- Bottles CRUD ---
 
 @app.get("/api/bar/bottles", response_model=list[BottleOut])
 async def bar_list_bottles(bar_id: str = Depends(resolve_target_bar_id)) -> list[BottleOut]:
+    """Lista todas as garrafas cadastradas no estoque do bar com métricas de lucro e `R$/ml`."""
     return list_bottles(bar_id)
 
 
@@ -499,6 +590,7 @@ async def bar_create_bottle(
     req: BottleCreateRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> BottleOut:
+    """Cadastra uma nova garrafa/insumo no catálogo do estabelecimento."""
     return create_bottle(bar_id, req)
 
 
@@ -508,6 +600,7 @@ async def bar_update_bottle(
     req: BottleUpdateRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> BottleOut:
+    """Edita preço `R$/ml`, custo, volume ou cor de uma garrafa e atualiza vitrines via WebSocket."""
     updated = update_bottle(bar_id, bottle_id, req)
     for m_row in list_bar_machine_rows(bar_id):
         await runtime_manager.get_executor(m_row["id"], m_row["slug"]).broadcast()
@@ -519,6 +612,7 @@ async def bar_delete_bottle(
     bottle_id: str,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> Response:
+    """Remove uma garrafa do catálogo (desvinculando-a automaticamente de bombas via `ON DELETE SET NULL`)."""
     delete_bottle(bar_id, bottle_id)
     for m_row in list_bar_machine_rows(bar_id):
         await runtime_manager.get_executor(m_row["id"], m_row["slug"]).broadcast()
@@ -529,6 +623,7 @@ async def bar_delete_bottle(
 
 @app.get("/api/bar/drinks", response_model=list[DrinkOut])
 async def bar_get_drinks(bar_id: str = Depends(resolve_target_bar_id)) -> list[DrinkOut]:
+    """Lista todas as receitas do cardápio do bar (ativas e pausadas) com cálculo de margem."""
     return list_bar_drinks(bar_id)
 
 
@@ -537,6 +632,7 @@ async def bar_post_drink(
     req: DrinkCreateRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> DrinkOut:
+    """Cria uma nova receita de drink no cardápio do bar."""
     return create_drink(bar_id, req)
 
 
@@ -546,6 +642,7 @@ async def bar_put_drink(
     req: DrinkUpdateRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> DrinkOut:
+    """Atualiza etapas em `ml`, precificação (`auto_ml` ou `fixed`), desconto ou status ativo do drink."""
     return update_drink(bar_id, drink_id, req)
 
 
@@ -554,6 +651,7 @@ async def bar_remove_drink(
     drink_id: str,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> Response:
+    """Exclui permanentemente uma receita do cardápio do bar (inclusive drinks iniciais de demonstração)."""
     delete_drink(bar_id, drink_id)
     return Response(status_code=204)
 
@@ -566,6 +664,7 @@ async def bar_get_machines(
     probe: bool = False,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> list[MachineOut]:
+    """Lista todas as máquinas do bar, suas 4 bombas, QR Code e credenciais de sincronização IoT."""
     base = _infer_base_url(request)
     rows = list_bar_machine_rows(bar_id)
     return [await _build_machine_out(r, base, probe=probe) for r in rows]
@@ -577,6 +676,7 @@ async def bar_post_machine(
     request: Request,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> MachineOut:
+    """Adiciona uma nova máquina de autosserviço ao bar gerando token IoT exclusivo e 4 bombas."""
     row = create_machine(bar_id, req)
     return await _build_machine_out(row, _infer_base_url(request), probe=False)
 
@@ -588,6 +688,7 @@ async def bar_put_machine(
     request: Request,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> MachineOut:
+    """Atualiza taxa de copo, pedido mínimo, volume máximo de segurança ou modo de conexão da máquina."""
     row = update_machine(bar_id, machine_id, req)
     return await _build_machine_out(row, _infer_base_url(request), probe=True)
 
@@ -599,6 +700,7 @@ async def bar_put_pump_slot(
     req: PumpSlotUpdateRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> list[PumpSlotOut]:
+    """Troca a garrafa espetada na bomba ou calibra sua vazão (`ml/s`), sincronizando OTA com o ESP."""
     m_row = get_machine_row_by_id(bar_id, machine_id)
     pumps = update_pump_slot(bar_id, machine_id, pump_id, req)
     ex = runtime_manager.get_executor(machine_id, m_row["slug"])
@@ -614,6 +716,7 @@ async def bar_post_pump_refill(
     req: PumpRefillRequest,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> list[PumpSlotOut]:
+    """Restaura em 1 clique o volume cheio da garrafa instalada na bomba após reposição física."""
     m_row = get_machine_row_by_id(bar_id, machine_id)
     pumps = refill_pump_bottle(bar_id, machine_id, pump_id, req.remaining_ml)
     ex = runtime_manager.get_executor(machine_id, m_row["slug"])
@@ -626,6 +729,7 @@ async def bar_emergency_stop_machine(
     machine_id: str,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> PreparationStatus:
+    """Corta imediatamente o acionamento das 4 bombas da máquina (Parada de Emergência Remota)."""
     m_row = get_machine_row_by_id(bar_id, machine_id)
     ex = runtime_manager.get_executor(machine_id, m_row["slug"])
     return await ex.emergency_stop()
@@ -635,11 +739,13 @@ async def bar_emergency_stop_machine(
 
 @app.get("/api/bar/orders", response_model=list[OrderOut])
 async def bar_get_orders(bar_id: str = Depends(resolve_target_bar_id)) -> list[OrderOut]:
+    """Retorna o histórico recente de pedidos, fila e status Pix do estabelecimento."""
     return list_bar_orders(bar_id)
 
 
 @app.get("/api/bar/analytics", response_model=BarAnalyticsOut)
 async def bar_get_analytics_summary(bar_id: str = Depends(resolve_target_bar_id)) -> BarAnalyticsOut:
+    """Retorna faturamento bruto, custo de insumos consumidos, split da plataforma e lucro líquido real."""
     return get_bar_analytics(bar_id)
 
 
@@ -648,6 +754,7 @@ async def bar_refund_order(
     order_id: str,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> OrderOut:
+    """Executa o estorno Pix automático (Mercado Pago ou Simulado) e retira o pedido da fila."""
     ord_out, provider, mp_tok, ext_id = mark_order_refunded(bar_id, order_id)
     try:
         await refund_pix_payment(provider, mp_tok, ext_id)
@@ -663,6 +770,7 @@ async def bar_retry_failed_order_endpoint(
     order_id: str,
     bar_id: str = Depends(resolve_target_bar_id),
 ) -> OrderOut:
+    """Reinsere na fila (`PAID_QUEUED`) um pedido interrompido por falha de hardware (`FAILED_DISPENSE`)."""
     ord_out = retry_failed_order(bar_id, order_id)
     ex = runtime_manager.get_executor(ord_out.machine_id, ord_out.machine_slug)
     await ex.broadcast()
@@ -673,6 +781,7 @@ async def bar_retry_failed_order_endpoint(
 
 @app.get("/api/superadmin/overview", response_model=PlatformOverviewOut)
 async def superadmin_overview(_: Principal = Depends(require_superadmin)) -> PlatformOverviewOut:
+    """Painel executivo da rede SaaS com métricas consolidadas de todos os bares clientes."""
     return get_platform_overview()
 
 
@@ -681,6 +790,7 @@ async def superadmin_create_bar(
     req: BarCreateRequest,
     _: Principal = Depends(require_superadmin),
 ) -> BarSummaryOut:
+    """Provisiona um novo bar cliente (tenant isolado) já com sua primeira máquina e token IoT."""
     return create_bar_tenant(req)
 
 
@@ -690,6 +800,7 @@ async def superadmin_update_bar(
     req: BarSuperAdminUpdateRequest,
     _: Principal = Depends(require_superadmin),
 ) -> BarSummaryOut:
+    """Altera taxa `%` de split da plataforma, credenciais do proprietário ou suspende/reativa um bar."""
     return update_bar_superadmin(bar_id, req)
 
 
@@ -698,6 +809,7 @@ async def superadmin_delete_bar(
     bar_id: str,
     _: Principal = Depends(require_superadmin),
 ) -> Response:
+    """Remove um tenant da plataforma com limpeza referencial completa em cascata (`ON DELETE CASCADE`)."""
     delete_bar_tenant(bar_id)
     return Response(status_code=204)
 
@@ -706,6 +818,7 @@ async def superadmin_delete_bar(
 
 @app.websocket("/api/ws/machines/{machine_slug}")
 async def websocket_machine_status(ws: WebSocket, machine_slug: str) -> None:
+    """Canal WebSocket pub/sub por máquina com fila limitada (`maxsize=32`, *drop-oldest* anti-backpressure)."""
     try:
         m_row = get_machine_row_by_slug(machine_slug)
     except HTTPException:
@@ -717,6 +830,7 @@ async def websocket_machine_status(ws: WebSocket, machine_slug: str) -> None:
     queue: asyncio.Queue[MachineRealtimeSnapshot] = asyncio.Queue(maxsize=32)
 
     async def on_snap(snap: MachineRealtimeSnapshot) -> None:
+        # Se a internet móvel do cliente oscilar e a fila encher, descarta o frame antigo priorizando o mais recente
         if queue.full():
             try:
                 queue.get_nowait()
@@ -741,11 +855,17 @@ async def websocket_machine_status(ws: WebSocket, machine_slug: str) -> None:
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def serve_spa(full_path: str):
+    """Serve os assets estáticos da SPA React (`frontend/dist`) com proteção contra *Path Traversal*.
+
+    Qualquer rota visual do cliente (`/m/maq-01`, `/painel`, `/superadmin`) faz fallback para
+    `index.html`, enquanto rotas inexistentes sob `api/` retornam `404 JSON` explícito.
+    """
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Endpoint da API não encontrado.")
     if FRONTEND_DIST_DIR.exists():
         dist_root = FRONTEND_DIST_DIR.resolve()
         target = (dist_root / full_path).resolve()
+        # Garante que `target` permaneça estritamente dentro de `frontend/dist`
         if full_path and target.is_relative_to(dist_root) and target.is_file():
             return FileResponse(target)
         index_file = dist_root / "index.html"

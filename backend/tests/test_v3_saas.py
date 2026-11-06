@@ -1,3 +1,24 @@
+"""Suíte de Testes de Integração Ponta a Ponta (E2E) — Bartender.OS v3.0 SaaS.
+
+Função Arquitetural e Garantia de Qualidade Comercial:
+------------------------------------------------------
+Valida de forma determinística e isolada (em banco SQLite temporário `tmp_path`) todo o
+fluxo crítico de geração de receita, segurança de fila e multi-tenancy da plataforma:
+
+1. **Autoatendimento Público & QR Code Vetorial (`/m/maq-01` + `qr.svg`):**
+   - Garante que o seed inicial entrega 4 bombas calibradas, 4 drinks ativos e arte SVG válida.
+2. **Autenticação JWT + CRUD Real de Garrafas (`R$/ml`) e Drinks:**
+   - Comprova o cálculo automático de volume útil descontando perda (`loss_pct`), valor da dose
+     de `50 ml`, exclusão real de receitas padrão e precificação dinâmica por mililitro + taxa de copo.
+3. **Concorrência na Fila Pix + Trava Anti-Desperdício de Copo:**
+   - Dois clientes (`Fábio` e `Maria`) compram simultaneamente; valida geração de código Pix EMV
+     BRCode (`000201...`), ordenação justa (`READY_FOR_CUP` #1 vs `PAID_QUEUED` #2), bloqueio HTTP `400`
+     sem confirmação de copo, bloqueio HTTP `409` contra tentativa de furar fila, abatimento exato de
+     estoque em `ml` após dosagem e promoção automática do próximo cliente da fila!
+4. **Onboarding Multi-Bares (`Super-Admin`) & Cloud Sync IoT (`ESP32`/`ESP8266`):**
+   - Cria um segundo estabelecimento independente (`Quiosque Praia Clube`), autentica seu proprietário
+     e valida o batimento de sincronização IoT autenticado via `X-Machine-Token`.
+"""
 from __future__ import annotations
 
 import os
@@ -7,6 +28,8 @@ from fastapi.testclient import TestClient
 
 
 def test_full_v3_commercial_workflow(tmp_path: Path):
+    """Executa o fluxo comercial completo Multi-Bares + Pix + Fila Inteligente + Cloud IoT Sync."""
+    # Redireciona o banco SQLite para um arquivo descartável exclusivo deste teste e força o simulador
     db_file = tmp_path / "test_v3.db"
     os.environ["BARTENDER_DB_PATH"] = str(db_file)
     os.environ["ESP32_MODE"] = "simulator"
@@ -234,3 +257,34 @@ def test_full_v3_commercial_workflow(tmp_path: Path):
         )
         assert iot_sync.status_code == 200
         assert iot_sync.json()["command"] == "none"
+
+        # 7. Proteção contra colagem acidental de URL ou Public Key no Access Token Mercado Pago
+        bad_url_tok = client.put(
+            "/api/bar/settings",
+            headers=headers_bar,
+            json={"payment_provider": "mercadopago", "mp_access_token": "http://localhost:8010/painel"},
+        )
+        assert bad_url_tok.status_code == 400
+        assert "URL" in bad_url_tok.json()["detail"]
+
+        bad_pubkey = client.put(
+            "/api/bar/settings",
+            headers=headers_bar,
+            json={
+                "payment_provider": "mercadopago",
+                "mp_access_token": "APP_USR-12345678-1234-1234-1234-1234567890ab",
+            },
+        )
+        assert bad_pubkey.status_code == 400
+        assert "Public Key" in bad_pubkey.json()["detail"]
+
+        valid_bearer_prefixed = client.put(
+            "/api/bar/settings",
+            headers=headers_bar,
+            json={
+                "payment_provider": "mercadopago",
+                "mp_access_token": "Bearer APP_USR-5819283746192837-110521-abcdef0123456789abcdef0123456789-998877665",
+            },
+        )
+        assert valid_bearer_prefixed.status_code == 200
+        assert valid_bearer_prefixed.json()["mp_token_masked"].startswith("APP_USR-")

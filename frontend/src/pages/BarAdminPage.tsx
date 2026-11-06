@@ -1,10 +1,29 @@
+/**
+ * @file src/pages/BarAdminPage.tsx
+ * @description Painel Operacional e Financeiro do Dono do Bar (`/painel` ou `/admin`).
+ *
+ * Proposta de Valor B2B ("ERP Completo de Coquetelaria Automática no Bolso"):
+ * - **DRE Instantâneo no Topo**: exibe Faturamento Pix Pago, Custo das Garrafas Consumidas (com litros
+ *   servidos), Lucro Líquido Real do Bar (já descontando insumos e split da plataforma) e Modo Pix ativo.
+ * - **5 Abas Integradas**:
+ *   1. `Garrafas & R$/ml` (`BottlesCrudSection`): cadastro de estoque com calculadora de markup/dose;
+ *   2. `Cardápio` (`DrinksCrudSection`): criação visual de drinks com custo e margem por copo;
+ *   3. `Máquinas, Bombas & QR Code` (`MachinesPumpsSection`): gestão física das 4 mangueiras e credenciais ESP;
+ *   4. `Vendas & Fila Pix`: auditoria de pedidos com botões de `"Reenviar à Fila"` e `"Estornar Pix"`;
+ *   5. `Conta Pix / Mercado Pago`: chaveamento imediato entre modo Sandbox (`simulated`) para testes e
+ *      liquidação Pix Oficial Banco Central (`mercadopago`) direto na conta do estabelecimento.
+ * - Suporta também acesso em modo de inspeção pelo `superadmin` (`← Voltar p/ Bares`).
+ */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Banknote,
+  CheckCircle2,
   Citrus,
   CreditCard,
   ExternalLink,
+  Eye,
+  EyeOff,
   LogOut,
   Palmtree,
   QrCode,
@@ -36,12 +55,17 @@ import {
   setStoredAuthToken,
 } from '../utils/format';
 
+/** Identificadores das 5 abas de gestão do estabelecimento. */
 type AdminTab = 'bottles' | 'drinks' | 'machines' | 'orders' | 'pix';
 
+/**
+ * Página administrativa do tenant Bar com login integrado, KPIs financeiros e CRUDs modulares.
+ */
 export const BarAdminPage: React.FC = () => {
   const [user, setUser] = useState<PrincipalUser | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
 
+  // Credenciais pré-preenchidas com conta demo para agilizar avaliação comercial / pitch
   const [loginEmail, setLoginEmail] = useState('dono@bartropical.com');
   const [loginPassword, setLoginPassword] = useState('bar123');
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -57,9 +81,16 @@ export const BarAdminPage: React.FC = () => {
   // Campos aba Pix
   const [provider, setProvider] = useState<PaymentProvider>('simulated');
   const [mpToken, setMpToken] = useState('');
+  const [showMpToken, setShowMpToken] = useState(false);
   const [savingPix, setSavingPix] = useState(false);
+  const [testingPix, setTestingPix] = useState(false);
   const [pixSavedMsg, setPixSavedMsg] = useState<string | null>(null);
+  const [pixErrorMsg, setPixErrorMsg] = useState<string | null>(null);
 
+  /**
+   * Carrega em paralelo (`Promise.all`) todo o ecossistema operacional e financeiro do bar,
+   * minimizando latência ao abrir o painel ou após mutações de CRUD.
+   */
   const loadAllBarData = useCallback(async (probe = false) => {
     const [bList, dList, mList, oList, an, st] = await Promise.all([
       bartenderApi.listBottles(),
@@ -78,6 +109,7 @@ export const BarAdminPage: React.FC = () => {
     setProvider(st.payment_provider);
   }, []);
 
+  /** Verifica sessão JWT salva ao montar a página e redireciona Super-Admin sem `inspectBarId` para `/superadmin`. */
   useEffect(() => {
     const check = async () => {
       const tok = getStoredAuthToken();
@@ -102,6 +134,7 @@ export const BarAdminPage: React.FC = () => {
     void check();
   }, [loadAllBarData]);
 
+  /** Realiza login do operador e direciona automaticamente conforme seu papel (`bar_owner` vs `superadmin`). */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
@@ -119,15 +152,18 @@ export const BarAdminPage: React.FC = () => {
     }
   };
 
+  /** Encerra a sessão administrativa local. */
   const handleLogout = () => {
     setStoredAuthToken(null);
     setUser(null);
   };
 
+  /** Salva o provedor Pix (`simulated` ou `mercadopago`) e atualiza o Access Token se informado. */
   const handleSavePixSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingPix(true);
     setPixSavedMsg(null);
+    setPixErrorMsg(null);
     try {
       const updated = await bartenderApi.updateBarSettings({
         payment_provider: provider,
@@ -137,12 +173,28 @@ export const BarAdminPage: React.FC = () => {
       setMpToken('');
       setPixSavedMsg('Configurações de Pix salvas com sucesso!');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Erro ao salvar configurações Pix.');
+      setPixErrorMsg(err instanceof Error ? err.message : 'Erro ao salvar configurações Pix.');
     } finally {
       setSavingPix(false);
     }
   };
 
+  /** Valida ao vivo o Access Token digitado (ou já salvo) diretamente na API oficial do Mercado Pago. */
+  const handleTestMercadoPago = async () => {
+    setTestingPix(true);
+    setPixSavedMsg(null);
+    setPixErrorMsg(null);
+    try {
+      const res = await bartenderApi.testMercadoPagoToken(mpToken);
+      setPixSavedMsg(`✅ ${res.message}`);
+    } catch (err) {
+      setPixErrorMsg(err instanceof Error ? err.message : 'Falha ao testar Access Token no Mercado Pago.');
+    } finally {
+      setTestingPix(false);
+    }
+  };
+
+  /** Solicita confirmação e executa o estorno financeiro Pix de um pedido pago. */
   const handleRefund = async (o: Order) => {
     if (!window.confirm(`Estornar o Pix de ${formatBrl(o.total_cents)} do pedido #${o.order_number}?`)) {
       return;
@@ -509,8 +561,15 @@ export const BarAdminPage: React.FC = () => {
             </div>
 
             {pixSavedMsg && (
-              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800">
-                {pixSavedMsg}
+              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                <span>{pixSavedMsg}</span>
+              </div>
+            )}
+
+            {pixErrorMsg && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-800 leading-relaxed">
+                ⚠️ {pixErrorMsg}
               </div>
             )}
 
@@ -550,22 +609,77 @@ export const BarAdminPage: React.FC = () => {
               </button>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-[#69432e] mb-1">
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-[#69432e]">
                 Access Token do Mercado Pago (Produção <code>APP_USR-...</code> ou Teste{' '}
                 <code>TEST-...</code>)
               </label>
-              <input
-                type="password"
-                value={mpToken}
-                onChange={(e) => setMpToken(e.target.value)}
-                placeholder={
-                  barSettings.has_mp_token
-                    ? `Já configurado (${barSettings.mp_token_masked}) — digite apenas para substituir`
-                    : 'Cole aqui seu Access Token do Mercado Pago Developers'
+              <div className="relative">
+                <input
+                  type={showMpToken ? 'text' : 'password'}
+                  name="mp_api_access_token_field"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={mpToken}
+                  onChange={(e) => {
+                    setMpToken(e.target.value);
+                    setPixErrorMsg(null);
+                  }}
+                  placeholder={
+                    barSettings.has_mp_token
+                      ? `Já configurado (${barSettings.mp_token_masked}) — cole aqui apenas se quiser trocar`
+                      : 'Cole aqui o Access Token (APP_USR-...) do Mercado Pago Developers'
+                  }
+                  className="w-full pl-4 pr-24 py-3 rounded-2xl bg-white border border-[#e5c7a3] text-xs sm:text-sm font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowMpToken((prev) => !prev)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#f7ead8] hover:bg-[#efdabc] text-[11px] font-bold text-[#5c3724] cursor-pointer"
+                >
+                  {showMpToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {showMpToken ? 'Ocultar' : 'Mostrar'}
+                </button>
+              </div>
+
+              {mpToken.trim() !== '' && (() => {
+                const trimmed = mpToken.trim().replace(/^Bearer\s+/i, '');
+                const isUrl = /^https?:\/\//i.test(trimmed);
+                const isPubKey = /^(APP_USR|TEST)-[0-9a-f]{8}-[0-9a-f]{4}-/i.test(trimmed);
+                const isGoodPrefix = trimmed.startsWith('APP_USR-') || trimmed.startsWith('TEST-');
+                if (isUrl) {
+                  return (
+                    <p className="text-[11px] font-bold text-rose-700">
+                      ⚠️ Atenção: você colou um link web (<code>{trimmed.slice(0, 28)}</code>) em vez do Access Token!
+                    </p>
+                  );
                 }
-                className="w-full px-4 py-3 rounded-2xl bg-white border border-[#e5c7a3] text-sm font-mono"
-              />
+                if (isPubKey) {
+                  return (
+                    <p className="text-[11px] font-bold text-rose-700">
+                      ⚠️ Essa é a <strong>Public Key</strong> (curta). Copie o 2º campo logo abaixo dela chamado <strong>Access Token</strong>!
+                    </p>
+                  );
+                }
+                if (!isGoodPrefix || trimmed.length < 48) {
+                  return (
+                    <p className="text-[11px] font-bold text-amber-700">
+                      ⚠️ O Access Token oficial começa com <code>APP_USR-</code> (ou <code>TEST-</code>) e tem cerca de 70 caracteres.
+                    </p>
+                  );
+                }
+                return (
+                  <p className="text-[11px] font-bold text-emerald-700">
+                    ✓ Formato de Access Token reconhecido ({trimmed.slice(0, 12)}••• · {trimmed.length} caracteres).
+                  </p>
+                );
+              })()}
+
+              <div className="p-3 rounded-2xl bg-amber-50/80 border border-amber-200 text-[11px] text-[#69432e] leading-relaxed">
+                <strong>Dica rápida:</strong> No painel <em>Mercado Pago Developers → Credenciais de produção</em> existem 2 linhas:
+                ignore a 1ª (<em>Public Key</em>) e clique no ícone de copiar da <strong>2ª linha (Access Token)</strong>. Use o botão{' '}
+                <strong>Mostrar</strong> acima para conferir se começa com <code>APP_USR-</code>.
+              </div>
             </div>
 
             <div className="p-4 rounded-2xl bg-[#fdf5ea] border border-[#ecd3b5] text-xs space-y-1.5 text-[#5c3724]">
@@ -581,13 +695,24 @@ export const BarAdminPage: React.FC = () => {
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={savingPix}
-              className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-[#15803d] to-[#0d9488] text-white font-bold text-sm shadow-md cursor-pointer"
-            >
-              {savingPix ? 'Salvando...' : 'Salvar Configuração de Pagamento'}
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="submit"
+                disabled={savingPix}
+                className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-[#15803d] to-[#0d9488] text-white font-bold text-sm shadow-md cursor-pointer disabled:opacity-60"
+              >
+                {savingPix ? 'Salvando...' : 'Salvar Configuração de Pagamento'}
+              </button>
+
+              <button
+                type="button"
+                disabled={testingPix || (!mpToken.trim() && !barSettings.has_mp_token)}
+                onClick={() => void handleTestMercadoPago()}
+                className="px-5 py-3.5 rounded-2xl bg-[#2d1810] hover:bg-[#432519] text-white font-bold text-sm shadow-sm cursor-pointer disabled:opacity-40"
+              >
+                {testingPix ? 'Verificando no Mercado Pago...' : '🔍 Testar Conexão Mercado Pago'}
+              </button>
+            </div>
           </form>
         )}
       </main>
