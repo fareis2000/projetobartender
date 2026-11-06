@@ -303,6 +303,12 @@ async def create_pix_charge(
                 detail = err_json.get("message") or detail
             except Exception:
                 pass
+            if "without key enabled" in str(detail).lower():
+                raise RuntimeError(
+                    "Sua conta Mercado Pago ainda não tem nenhuma Chave Pix ativa para gerar QR Code. "
+                    "Abra o app Mercado Pago no celular → Área Pix → Minhas chaves → Cadastrar chave aleatória "
+                    "(leva 15s e não mexe nas suas chaves do Nubank) e tente novamente!"
+                )
             if resp.status_code == 401:
                 raise RuntimeError(
                     f"Mercado Pago recusou o Access Token (401: {detail}). "
