@@ -1,3 +1,19 @@
+/**
+ * @file CustomDrinkBuilder.tsx
+ * @description Estúdio interativo "Monte seu Drink" para criação de receitas personalizadas ao mililitro.
+ *
+ * Papel na Arquitetura / Engajamento em Eventos:
+ * ----------------------------------------------
+ * É o recurso de maior engajamento do público em festas, feiras de tecnologia e ativações:
+ *   - Permite batizar o drink com o próprio nome do convidado e ajustar os 4 ingredientes em
+ *     passos precisos de `5 ml` (via slider tátil ou botões `-25ml` / `+25ml`), além de contar
+ *     com presets rápidos ("Sugestões da casa") para inspiração em 1 toque.
+ *   - Calcula localmente e em tempo real a estimativa física de preparo (`estimatedSeconds`),
+ *     somando `ml / flow_rate_ml_s` de cada bomba ativa mais as pausas inter-ingredientes (`1.2s`),
+ *     espelhando exatamente a lógica do backend (`dispense_custom_drink`).
+ *   - Aplica travas visuais e funcionais de segurança física: exige mínimo de `10 ml` e bloqueia
+ *     envio caso a soma ultrapasse `MAX_CUP_ML` (`450 ml`), prevenindo transbordamento do copo.
+ */
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -12,15 +28,23 @@ import {
 import type { CustomDrinkPayload, PumpConfig, PumpId } from '../types/bartender';
 import { GlassArtwork } from './GlassArtwork';
 
+/** Propriedades do estúdio interativo `CustomDrinkBuilder`. */
 interface CustomDrinkBuilderProps {
+  /** Lista atualizada das 4 bombas físicas e suas vazões calibradas (`ml/s`). */
   pumps: PumpConfig[];
+  /** Bloqueia o envio enquanto a máquina estiver ocupada preparando outra bebida. */
   disabled: boolean;
+  /** Callback acionado ao submeter uma mistura personalizada válida. */
   onSubmitCustom: (payload: CustomDrinkPayload) => void;
 }
 
+/** Limite volumétrico de segurança por copo (espelha `MAX_CUP_ML` no backend). */
 const MAX_CUP_ML = 450;
+
+/** Ordem fixa de apresentação e empilhamento visual das camadas no copo. */
 const PUMP_ORDER: PumpId[] = ['amarelo', 'vermelho', 'verde', 'azul'];
 
+/** Combinações pré-balanceadas de 1 clique para facilitar a escolha de convidados indecisos. */
 const QUICK_PRESETS: Array<{
   label: string;
   name: string;
@@ -43,6 +67,9 @@ const QUICK_PRESETS: Array<{
   },
 ];
 
+/**
+ * Componente de formulário interativo em duas colunas (controles à esquerda + copo ao vivo à direita).
+ */
 export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
   pumps,
   disabled,
@@ -62,10 +89,16 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     return map;
   }, [pumps]);
 
+  // Verificações instantâneas de limites volumétricos (mín. 10 ml, máx. 450 ml)
   const totalMl = volumes.amarelo + volumes.vermelho + volumes.verde + volumes.azul;
   const overLimit = totalMl > MAX_CUP_ML;
   const underLimit = totalMl < 10;
 
+  /**
+   * Estima em tempo real quantos segundos o drink levará para ficar pronto:
+   * soma o tempo de bombeamento de cada ingrediente ativo (`ml / vazão`) + `1.2s` de pausa
+   * de estabilização entre trocas de bombas.
+   */
   const estimatedSeconds = useMemo(() => {
     let sec = 0;
     let activeCount = 0;
@@ -83,15 +116,18 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     return Math.round(sec * 10) / 10;
   }, [volumes, pumpsById]);
 
+  /** Quantiza o valor em múltiplos de 5 ml e limita entre 0 e 350 ml por ingrediente. */
   const setPumpVolume = (pid: PumpId, nextVal: number) => {
     const clamped = Math.max(0, Math.min(350, Math.round(nextVal / 5) * 5));
     setVolumes((prev) => ({ ...prev, [pid]: clamped }));
   };
 
+  /** Zera todos os sliders ("Esvaziar Copo") para começar uma receita do zero. */
   const resetAll = () => {
     setVolumes({ amarelo: 0, vermelho: 0, verde: 0, azul: 0 });
   };
 
+  /** Valida restrições de segurança e envia o pedido customizado ao orquestrador principal. */
   const handlePrepare = (e: React.FormEvent) => {
     e.preventDefault();
     if (overLimit || underLimit || disabled) return;
@@ -101,6 +137,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     });
   };
 
+  // Camadas líquidas passadas ao copo vetorial para feedback visual instantâneo a cada mexida no slider
   const layers = PUMP_ORDER.map((pid) => ({
     color: pumpsById[pid]?.color_hex ?? '#f59e0b',
     ml: volumes[pid],
@@ -173,6 +210,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
             const pump = pumpsById[pid];
             if (!pump) return null;
             const val = volumes[pid];
+            // Bases diluidoras (`is_mixer`, ex: Água com Gás) permitem até 350ml; xaropes concentrados até 200ml
             const maxSlider = pump.is_mixer ? 350 : 200;
 
             return (

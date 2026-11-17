@@ -1,22 +1,47 @@
+/**
+ * @file Navbar.tsx
+ * @description Barra superior fixa (sticky) com identidade da marca, navegação por abas e telemetria de conexão.
+ *
+ * Papel na Arquitetura / UX de Eventos:
+ * -------------------------------------
+ * Permanece acessível no topo da tela (`backdrop-blur-xl`) oferecendo:
+ *   1. Alternância instantânea entre o `Cardápio` pronto e o estúdio `Monte seu Drink`.
+ *   2. Indicador semafórico em tempo real do estado do hardware (`ESP32 Wi-Fi`, `USB (COMx)`,
+ *      `Modo Demonstração` ou `ESP32 Offline`), dando tranquilidade imediata à equipe técnica
+ *      do evento com um simples olhar para a tela do totem.
+ *   3. Gatilho de acesso rápido ao painel lateral de calibração (`SettingsDrawer`).
+ */
 import React from 'react';
 import { Citrus, GlassWater, Palmtree, Settings2, Sparkles, Usb, Wifi, WifiOff } from 'lucide-react';
 import type { HardwareHealth } from '../types/bartender';
 
+/** Abas principais disponíveis na navegação superior da aplicação. */
 export type ActiveTab = 'menu' | 'custom';
 
+/** Propriedades recebidas pelo componente `Navbar`. */
 interface NavbarProps {
+  /** Aba atualmente selecionada pelo usuário. */
   activeTab: ActiveTab;
+  /** Callback disparado ao clicar em "Cardápio" ou "Monte seu Drink". */
   onChangeTab: (tab: ActiveTab) => void;
+  /** Diagnóstico ao vivo do transporte ativo (Wi-Fi, USB Serial ou Simulador). */
   hardware: HardwareHealth | null;
+  /** Abre o painel lateral `SettingsDrawer` para ajuste de IP/COM e calibração de vazão. */
   onOpenSettings: () => void;
 }
 
+/**
+ * Componente de cabeçalho responsivo do Bartender Tropical.
+ */
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onChangeTab,
   hardware,
   onOpenSettings,
 }) => {
+  /**
+   * Renderiza o selo visual colorido correspondente ao transporte ativo reportado pelo backend.
+   */
   const renderConnectionBadge = () => {
     if (!hardware) {
       return (

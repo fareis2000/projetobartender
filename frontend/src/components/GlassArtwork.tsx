@@ -1,19 +1,51 @@
+/**
+ * @file GlassArtwork.tsx
+ * @description Motor gráfico SVG vetorial de copo Highball com camadas líquidas dinâmicas, gelo e carbonatação.
+ *
+ * Papel na Arquitetura Visual / Diferencial de UX:
+ * ------------------------------------------------
+ * Em vez de depender de fotos estáticas (que ficariam desatualizadas sempre que o cliente
+ * trocasse um sabor de garrafa ou criasse uma mistura própria), este componente desenha
+ * matematicamente em SVG puro (`viewBox="0 0 200 230"`):
+ *   1. Empilhamento proporcional de baixo para cima (`renderedSlices`) recortado pela silhueta
+ *      interna cônica do vidro (`<clipPath id="glass-clip-...">`), com transição CSS suave (`280ms`);
+ *   2. Feixe vertical animado (`pouringColor` + `.stream-flow`) conectando o bico dosador ao
+ *      nível atual da superfície líquida (`liquidStartY`) durante o preparo real via WebSocket;
+ *   3. Elementos sensoriais de frescor: cubos de gelo flutuantes que acompanham a altura do líquido,
+ *      bolhas ascendentes (`bubble-rise`), gotículas externas de condensação, canudo listrado,
+ *      rodela cítrica e folhas de hortelã.
+ *   4. Uso de `React.useId()` para isolar IDs de `<clipPath>` e `<linearGradient>`, permitindo
+ *      renderizar dezenas de copos simultaneamente na mesma tela sem colisão de referências SVG.
+ */
 import React from 'react';
 
+/** Camada individual de bebida a ser empilhada dentro do copo vetorial. */
 export interface LiquidLayer {
+  /** Cor hexadecimal da camada (ex.: `'#ef4444'`). */
   color: string;
+  /** Volume desta camada em mililitros. */
   ml: number;
+  /** Rótulo opcional do ingrediente para semântica/debug. */
   label?: string;
 }
 
+/** Propriedades de configuração e animação do `GlassArtwork`. */
 interface GlassArtworkProps {
+  /** Lista ordenada de camadas líquidas (empilhadas da base para o topo do copo). */
   layers: LiquidLayer[];
+  /** Capacidade nominal do copo usada para calcular o percentual de enchimento (padrão `400 ml`). */
   maxCapacityMl?: number;
+  /** Sobrescreve diretamente a porcentagem preenchida (`0` a `100`), usado pela telemetria ao vivo no modal. */
   fillOverridePercent?: number;
+  /** Quando presente, desenha um jato líquido animado desta cor caindo no centro do copo. */
   pouringColor?: string | null;
+  /** Escala responsiva pré-definida do componente (`'sm'`, `'md'` ou `'lg'`). */
   size?: 'sm' | 'md' | 'lg';
 }
 
+/**
+ * Ilustração vetorial reativa do copo de coquetel tropical.
+ */
 export const GlassArtwork: React.FC<GlassArtworkProps> = ({
   layers,
   maxCapacityMl = 400,
@@ -21,9 +53,11 @@ export const GlassArtwork: React.FC<GlassArtworkProps> = ({
   pouringColor = null,
   size = 'md',
 }) => {
+  // ID único sanitizado para evitar conflito de `<clipPath>` entre múltiplos cards na grade
   const uid = React.useId().replace(/:/g, '');
   const totalMl = layers.reduce((acc, l) => acc + Math.max(0, l.ml), 0);
 
+  // Calcula o percentual vertical preenchido (limitado a 95% no modo estático para deixar borda realista no vidro)
   const computedFillPct =
     fillOverridePercent !== undefined
       ? Math.max(0, Math.min(100, fillOverridePercent))
@@ -43,6 +77,8 @@ export const GlassArtwork: React.FC<GlassArtworkProps> = ({
         ? 'w-52 h-64'
         : 'w-40 h-48';
 
+  // Empilha cada camada de baixo (`glassBottomY`) para cima proporcionalmente à sua fração em `totalMl`.
+  // Soma `+ 1` px na altura para evitar frestas sub-pixel (anti-aliasing seams) entre duas cores adjacentes.
   let cursorY = glassBottomY;
   const renderedSlices =
     totalMl > 0 && totalLiquidHeight > 0

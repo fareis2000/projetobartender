@@ -1,3 +1,20 @@
+"""Catálogo de receitas tropicais, configuração padrão das 4 bombas e persistência local JSON.
+
+Papel na Arquitetura:
+---------------------
+Gerencia o inventário líquido da máquina (`DEFAULT_PUMPS` + `backend/data/pumps.json`) e o
+cardápio oficial de drinks (`BASE_RECIPES`), enriquecendo cada receita em tempo real com o
+volume total (`total_ml`) e a duração exata estimada (`estimated_seconds`) calculada a partir
+das vazões calibradas atuais de cada bomba.
+
+Valor Comercial / Operação em Eventos:
+--------------------------------------
+  - Zero dependência de SGBD externo (PostgreSQL/MySQL/MongoDB): toda a calibração e os nomes
+    das bebidas nas garrafas são persistidos em `pumps.json` (legível por humanos e fácil de fazer backup).
+  - Flexibilidade de cardápio: se a equipe do bar trocar uma garrafa ou recalibrar uma mangueira
+    pelo painel ⚙️, todos os tempos estimados e rótulos de ingredientes nos cards do site são
+    atualizados instantaneamente sem reiniciar o servidor.
+"""
 from __future__ import annotations
 
 import json
@@ -5,9 +22,12 @@ from pathlib import Path
 from .config import DATA_DIR
 from .models import DoseStep, DrinkRecipe, PumpConfig, PumpId, PumpUpdateRequest
 
+# Caminho do arquivo JSON local onde nomes de ingredientes e vazões calibradas são salvos
 PUMPS_FILE: Path = DATA_DIR / "pumps.json"
 
 # Mapeamento oficial calibrado do repositório original + GPIOs seguros do ESP32-WROOM-32
+# Nota de Hardware: GPIOs 16, 17, 18 e 19 evitam os pinos de Flash SPI (6-11) e pinos de strapping,
+# garantindo boot limpo sem acionamento involuntário dos relés.
 DEFAULT_PUMPS: dict[PumpId, PumpConfig] = {
     "amarelo": PumpConfig(
         id="amarelo",
@@ -51,6 +71,9 @@ DEFAULT_PUMPS: dict[PumpId, PumpConfig] = {
     ),
 }
 
+# Catálogo base de coquetéis prontos ("Clássicos da Casa" + "Especiais Tropicais").
+# Observe que a Bomba 4 (`azul`, base gaseificada) entra sempre na última etapa com `pause_ms=0`
+# para misturar naturalmente os xaropes mais densos depositados no fundo do copo.
 BASE_RECIPES: list[DrinkRecipe] = [
     DrinkRecipe(
         id="red",
@@ -174,27 +197,53 @@ BASE_RECIPES: list[DrinkRecipe] = [
 
 
 def load_pumps() -> dict[PumpId, PumpConfig]:
+    """Carrega a configuração das 4 bombas mesclando o padrão de fábrica com `pumps.json`.
+
+    Caso `backend/data/pumps.json` não exista ou esteja corrompido, retorna cópias profundas
+    seguras de `DEFAULT_PUMPS` (auto-healing), garantindo que o servidor nunca falhe na partida.
+
+    Returns:
+        dict[PumpId, PumpConfig]: Mapa das 4 bombas indexado por `PumpId`.
+    """
+    # Inicia com cópia isolada dos padrões de fábrica para evitar mutação acidental em memória
     pumps = {k: v.model_copy(deep=True) for k, v in DEFAULT_PUMPS.items()}
     if PUMPS_FILE.exists():
         try:
             raw = json.loads(PUMPS_FILE.read_text(encoding="utf-8"))
             for pid, data in raw.items():
                 if pid in pumps:
+                    # Valida cada entrada com Pydantic antes de aceitar o override persistido
                     pumps[pid] = PumpConfig(**data)
         except Exception:
+            # Se o JSON manual contiver erro sintático ou valor fora de faixa, mantém DEFAULT_PUMPS
             pass
     return pumps
 
 
 def save_pumps(pumps: dict[PumpId, PumpConfig]) -> None:
+    """Persiste o estado atual das 4 bombas em `backend/data/pumps.json` formatado em UTF-8.
+
+    Args:
+        pumps (dict[PumpId, PumpConfig]): Dicionário completo das bombas a ser gravado em disco.
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = {pid: cfg.model_dump() for pid, cfg in pumps.items()}
     PUMPS_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def update_pump_config(pump_id: PumpId, req: PumpUpdateRequest) -> PumpConfig:
+    """Atualiza nome do ingrediente, descrição e/ou vazão calibrada (`ml/s`) de uma bomba específica.
+
+    Args:
+        pump_id (PumpId): Identificador da bomba (`amarelo`, `vermelho`, `verde` ou `azul`).
+        req (PumpUpdateRequest): Campos parciais enviados pelo operador no painel de calibração.
+
+    Returns:
+        PumpConfig: Configuração resultante da bomba já validada e salva em `pumps.json`.
+    """
     pumps = load_pumps()
     current = pumps[pump_id]
+    # Sobrescreve apenas os atributos efetivamente enviados (ignora campos `None`)
     updated = current.model_copy(
         update={
             k: v
@@ -207,6 +256,18 @@ def update_pump_config(pump_id: PumpId, req: PumpUpdateRequest) -> PumpConfig:
 
 
 def compute_recipe_metrics(recipe: DrinkRecipe, pumps: dict[PumpId, PumpConfig]) -> DrinkRecipe:
+    """Calcula dinamicamente o volume total (`ml`) e a duração física (`s`) de uma receita.
+
+    Fórmula volumétrica aplicada por etapa:
+        tempo_etapa (s) = (volume_ml / vazao_ml_s) + (pausa_ms / 1000.0)
+
+    Args:
+        recipe (DrinkRecipe): Receita base contendo a lista de etapas (`steps`).
+        pumps (dict[PumpId, PumpConfig]): Configuração vigente das bombas com as vazões calibradas.
+
+    Returns:
+        DrinkRecipe: Nova instância de `DrinkRecipe` preenchida com `total_ml` e `estimated_seconds`.
+    """
     total_ml = sum(s.ml for s in recipe.steps)
     est_sec = 0.0
     for s in recipe.steps:
@@ -221,13 +282,25 @@ def compute_recipe_metrics(recipe: DrinkRecipe, pumps: dict[PumpId, PumpConfig])
 
 
 def get_catalog() -> list[DrinkRecipe]:
+    """Retorna todas as receitas do cardápio com volumes e tempos recalculados para a calibração atual.
+
+    Returns:
+        list[DrinkRecipe]: Lista completa de drinks prontos para exibição na vitrine do frontend.
+    """
     pumps = load_pumps()
     return [compute_recipe_metrics(r, pumps) for r in BASE_RECIPES]
 
 
 def get_drink_by_id(drink_id: str) -> DrinkRecipe | None:
+    """Busca uma receita específica pelo seu identificador único (`id`).
+
+    Args:
+        drink_id (str): Slug da receita (ex.: `'red'`, `'yellow'`, `'brisa-tropical'`).
+
+    Returns:
+        DrinkRecipe | None: Receita encontrada com métricas calculadas ou `None` caso inexistente.
+    """
     for d in get_catalog():
         if d.id == drink_id:
             return d
     return None
-

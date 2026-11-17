@@ -1,118 +1,165 @@
 /*
  * ============================================================================
- * BARTENDER AUTOMÁTICO v2.0 — FIRMWARE HÍBRIDO (ESP8266 NodeMCU & ESP32)
+ * PROJETO BARTENDER AUTOMÁTICO — FIRMWARE UNIFICADO v2.0 + v3.0 (MULTI-REDE)
+ * Compatível com: ESP8266 (NodeMCU / Wemos D1 Mini) e ESP32 (DOIT DevKit V1)
  * ============================================================================
- * Compatível com:
- *   1. API HTTP JSON via Wi-Fi (porta 80) + mDNS (http://bartender.local)
- *   2. Comunicação USB Serial (115200 baud) como fallback direto
- *   3. Dosagem não-bloqueante (millis) com telemetria de progresso ao vivo
- *   4. Parada de Emergência instantânea (/stop ou comando Serial STOP)
- *   5. Persistência de calibração de vazão (ml/s) em Flash (EEPROM / NVS)
  *
- * PINOUT AUTOMÁTICO POR PLACA:
- *   [ESP8266 NodeMCU 1.0 / Wemos D1 Mini]
- *     - D1 (GPIO 5)  -> Bomba 1 (Amarela / Citrus)
- *     - D2 (GPIO 4)  -> Bomba 2 (Vermelha / Frutas Vermelhas)
- *     - D5 (GPIO 14) -> Bomba 3 (Verde / Maçã Verde)
- *     - D6 (GPIO 12) -> Bomba 4 (Azul / Base Água c/ Gás)
- *     - D0 (GPIO 16) -> LED Antena / Indicador
- *     - D7 (GPIO 13) -> Buzzer Passivo (melodia final)
- *
- *   [ESP32-WROOM-32 / DevKit V1]
- *     - GPIO 16, 17, 18, 19 -> Bombas 1 a 4 | GPIO 21 -> LED | GPIO 22 -> Buzzer
+ * RODA EM QUALQUER REDE (v2 na porta 8000 E v3 na porta 8010 sem regravar!):
+ *   1. Multi-WiFi Automático: Escaneia o ambiente e conecta sozinho em qualquer
+ *      rede conhecida (roteador de casa, hotspot do celular ou Wi-Fi de evento).
+ *   2. Auto-Descoberta UDP (Porta 4210): O servidor Python localiza o IP do ESP
+ *      automaticamente em qualquer rede (mesmo quando bartender.local falha!) e
+ *      sincroniza sozinho o IP do servidor v3 sem precisar editar código.
+ *   3. Portal Web Integrado (http://192.168.4.1): Mantém o Wi-Fi próprio do ESP
+ *      ("Bartender-ESP32", senha "12345678") ativo para configurar qualquer Wi-Fi
+ *      novo pelo navegador do celular em 5 segundos.
+ *   4. Triplo Canal Simultâneo:
+ *      - API HTTP LAN (v2 e v3): GET /status, POST /dispense, POST /stop
+ *      - Cloud Sync IoT (v3):    POST /api/iot/maq-01/sync
+ *      - Cabo USB Serial (115200): PLAN:..., STOP, STATUS, WIFI:..., NETINFO
  * ============================================================================
  */
+
+#include <Arduino.h>
+#include <EEPROM.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 
 #if defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESP8266WebServer.h>
   #include <ESP8266mDNS.h>
-  #include <EEPROM.h>
-  using HttpServer = ESP8266WebServer;
-  const char* DEVICE_MODEL = "ESP8266-NodeMCU";
+  #include <ESP8266HTTPClient.h>
+  #include <WiFiClientSecureBearSSL.h>
+  using WebServerType = ESP8266WebServer;
+  #define DEVICE_MODEL "ESP8266"
 #elif defined(ESP32)
   #include <WiFi.h>
   #include <WebServer.h>
   #include <ESPmDNS.h>
+  #include <HTTPClient.h>
+  #include <WiFiClientSecure.h>
   #include <Preferences.h>
-  using HttpServer = WebServer;
-  const char* DEVICE_MODEL = "ESP32-WROOM-32";
+  using WebServerType = WebServer;
+  #define DEVICE_MODEL "ESP32"
 #else
-  #error "Selecione uma placa ESP8266 (NodeMCU 1.0 ESP-12E) ou ESP32 no Arduino IDE."
+  #error "Selecione uma placa ESP8266 (NodeMCU 1.0) ou ESP32 (ESP32 Dev Module) na Arduino IDE!"
 #endif
 
-// Carrega senhas e chaves privadas de bombas/secrets.h (ignorado no Git)
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-#warning "bombas/secrets.h nao encontrado! Copie secrets.example.h para secrets.h e preencha seu Wi-Fi."
-#define SECRET_WIFI_SSID ""
-#define SECRET_WIFI_PASSWORD ""
-#define SECRET_AP_SSID "Bartender-ESP"
-#define SECRET_AP_PASSWORD "12345678"
-#define SECRET_API_TOKEN ""
+#if defined(__has_include)
+  #if __has_include("secrets.h")
+    #include "secrets.h"
+  #endif
 #endif
 
-/* ================= CONFIGURAÇÃO DE REDE WI-FI ================= */
-const char* WIFI_SSID = SECRET_WIFI_SSID;
-const char* WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
-const char* MDNS_HOSTNAME = "bartender";  // http://bartender.local
+/* ================= CREDENCIAIS MULTI-REDE EMBUTIDAS ========================= */
+#ifndef SECRET_WIFI_SSID
+  #define SECRET_WIFI_SSID      "DR.PC"
+#endif
+#ifndef SECRET_WIFI_PASSWORD
+  #define SECRET_WIFI_PASSWORD  "fabio1234"
+#endif
+#ifndef SECRET_AP_SSID
+  #define SECRET_AP_SSID        "Bartender-ESP32"
+#endif
+#ifndef SECRET_AP_PASSWORD
+  #define SECRET_AP_PASSWORD    "12345678"
+#endif
+#ifndef SECRET_API_TOKEN
+  #define SECRET_API_TOKEN      "iot_1CGRzJLaTkhqUIl9ITZcR3iC"
+#endif
+#ifndef SECRET_CLOUD_SYNC_URL
+  #define SECRET_CLOUD_SYNC_URL "http://192.168.0.210:8010/api/iot/maq-01/sync"
+#endif
 
-// Caso o Wi-Fi acima não conecte em 10s, cria ponto de acesso próprio:
-const char* AP_SSID = SECRET_AP_SSID;
-const char* AP_PASSWORD = SECRET_AP_PASSWORD;
-const char* API_TOKEN = SECRET_API_TOKEN;
+struct WifiCred {
+  const char* ssid;
+  const char* pass;
+};
 
-/* ================= PINOS SEGUROS (ESP8266 / ESP32) ============ */
+#ifndef SECRET_KNOWN_WIFI_LIST
+  #define SECRET_KNOWN_WIFI_LIST \
+    { "DR.PC-2G", "F@bio1234" }, \
+    { "DR.PC-2G", "fabio1234" }, \
+    { "DR.PC", "fabio1234" }, \
+    { "Xiaomi 13T", "91186240" }, \
+    { "MM phone", "123456789" }, \
+    { "iPhone", "fabinhoinho" }, \
+    { "Mynds Tech", "Mynds2024#" }, \
+    { "Jersom", "08010512" }, \
+    { "ALFA_ACADEMICO", "ProfeAlfa#2026!" }, \
+    { "MyndsCorp", "Mynds2024#" }, \
+    { "AP00008299", "SN2008@+" }, \
+    { "REGINA 2", "reta247724" }, \
+    { "ACADEMICA", "WIFI@Academico" }
+#endif
+
+const WifiCred KNOWN_NETWORKS[] = {
+  { SECRET_WIFI_SSID, SECRET_WIFI_PASSWORD },
+  SECRET_KNOWN_WIFI_LIST
+};
+const int KNOWN_NETWORKS_COUNT = sizeof(KNOWN_NETWORKS) / sizeof(KNOWN_NETWORKS[0]);
+
+const char* WIFI_SSID          = SECRET_WIFI_SSID;
+const char* WIFI_PASSWORD      = SECRET_WIFI_PASSWORD;
+const char* AP_SSID            = SECRET_AP_SSID;
+const char* AP_PASSWORD        = SECRET_AP_PASSWORD;
+const char* MDNS_HOSTNAME      = "bartender";
+const uint16_t UDP_DISCOVERY_PORT = 4210;
+
+String runtimeWifiSsid     = "";
+String runtimeWifiPass     = "";
+String runtimeCloudSyncUrl = SECRET_CLOUD_SYNC_URL;
+String runtimeApiToken     = SECRET_API_TOKEN;
+
+/* ================= LÓGICA DOS RELÉS E PINAGEM POR PLACA ===================== */
+const bool RELAY_ACTIVE_LOW = true;
+
 #if defined(ESP8266)
-const int PIN_AMARELO  = 5;   // Pino D1 (GPIO 5)  — Bomba 1 (Amarela)
-const int PIN_VERMELHO = 4;   // Pino D2 (GPIO 4)  — Bomba 2 (Vermelha)
-const int PIN_VERDE    = 14;  // Pino D5 (GPIO 14) — Bomba 3 (Verde)
-const int PIN_AZUL     = 12;  // Pino D6 (GPIO 12) — Bomba 4 (Azul / Base)
-
-const int PIN_LED      = 16;  // Pino D0 (GPIO 16) — LED Antena / Indicador
-const int PIN_BUZZER   = 13;  // Pino D7 (GPIO 13) — Buzzer passivo (melodia)
+  // NodeMCU ESP8266: D1(5), D2(4), D5(14), D6(12), Buzzer D7(13), LED D0(16)
+  const uint8_t PIN_BOMBA_AMARELO  = 5;   // D1
+  const uint8_t PIN_BOMBA_VERMELHO = 4;   // D2
+  const uint8_t PIN_BOMBA_VERDE    = 14;  // D5
+  const uint8_t PIN_BOMBA_AZUL     = 12;  // D6
+  const uint8_t PIN_BUZZER         = 13;  // D7
+  const uint8_t PIN_LED            = 16;  // D0
 #else
-const int PIN_AMARELO  = 16;  // GPIO 16 — Bomba 1 (Citrus / Amarela)
-const int PIN_VERMELHO = 17;  // GPIO 17 — Bomba 2 (Frutas Vermelhas)
-const int PIN_VERDE    = 18;  // GPIO 18 — Bomba 3 (Maçã Verde)
-const int PIN_AZUL     = 19;  // GPIO 19 — Bomba 4 (Base Água c/ Gás / Soda)
-
-const int PIN_LED      = 21;  // GPIO 21 — LED Antena / Indicador
-const int PIN_BUZZER   = 22;  // GPIO 22 — Buzzer passivo (melodia final)
+  // ESP32 DevKit V1: GPIO 16, 17, 18, 19, Buzzer 25, LED 2
+  const uint8_t PIN_BOMBA_AMARELO  = 16;
+  const uint8_t PIN_BOMBA_VERMELHO = 17;
+  const uint8_t PIN_BOMBA_VERDE    = 18;
+  const uint8_t PIN_BOMBA_AZUL     = 19;
+  const uint8_t PIN_BUZZER         = 25;
+  const uint8_t PIN_LED            = 2;
 #endif
 
-const bool RELE_ATIVO_EM_LOW = true;
-
-/* ================= CALIBRAÇÃO PADRÃO (ml/s) =================== */
-struct PumpDef {
+/* ================= ESTRUTURAS E ESTADO GLOBAL =============================== */
+struct PumpChannel {
   const char* key;
-  int pin;
+  uint8_t pin;
   float flowMlPerSec;
 };
 
-PumpDef pumps[4] = {
-  { "amarelo", PIN_AMARELO, 30.5f },
-  { "vermelho", PIN_VERMELHO, 32.3f },
-  { "verde", PIN_VERDE, 32.3f },
-  { "azul", PIN_AZUL, 35.9f }
+PumpChannel pumps[4] = {
+  { "amarelo",  PIN_BOMBA_AMARELO,  28.0f },
+  { "vermelho", PIN_BOMBA_VERMELHO, 28.0f },
+  { "verde",    PIN_BOMBA_VERDE,    28.0f },
+  { "azul",     PIN_BOMBA_AZUL,     32.0f }
 };
 
-/* ================= NOTAS MUSICAIS ============================= */
-#define NOTE_REST 0
-#define NOTE_GS4 415
-#define NOTE_AS4 466
-#define NOTE_C5 523
-
-const int MELODY_NOTES[] = {
-  NOTE_C5, NOTE_C5, NOTE_C5, NOTE_C5,
-  NOTE_GS4, NOTE_AS4, NOTE_C5, NOTE_REST, NOTE_AS4, NOTE_C5
+struct PlanStep {
+  int pumpIdx;
+  float ml;
+  unsigned long pourMs;
+  unsigned long pauseMs;
 };
-const int MELODY_DIVS[] = { 8, 8, 8, 3, 3, 3, 8, 8, 8, 2 };
-const int MELODY_LEN = sizeof(MELODY_NOTES) / sizeof(MELODY_NOTES[0]);
 
-/* ================= MÁQUINA DE ESTADOS ========================= */
-enum SystemState {
+const int MAX_STEPS = 8;
+PlanStep plan[MAX_STEPS];
+int planCount = 0;
+int currentStep = 0;
+
+enum MachineState {
   STATE_IDLE,
   STATE_DOSING,
   STATE_PAUSING,
@@ -121,261 +168,258 @@ enum SystemState {
   STATE_STOPPED
 };
 
-struct DoseStep {
-  int pumpIdx;
-  float ml;
-  unsigned long pourMs;
-  unsigned long pauseMs;
-};
-
-const int MAX_STEPS = 12;
-DoseStep plan[MAX_STEPS];
-int planCount = 0;
-int currentStep = 0;
-
-SystemState state = STATE_IDLE;
-String currentDrinkName = "";
+MachineState state = STATE_IDLE;
 unsigned long stateStartMs = 0;
-unsigned long planTotalMs = 0;
-unsigned long completedMs = 0;
-unsigned long lastSerialReportMs = 0;
+unsigned long jobStartMs = 0;
+unsigned long totalExpectedMs = 1;
+String currentDrinkName = "";
+bool startedByCloud = false;
 
-// Controle não-bloqueante da melodia
+unsigned long lastSerialProgressMs = 0;
+unsigned long lastCloudSyncMs = 0;
+bool cloudServerReachable = true;
+
+#define NOTE_C4  262
+#define NOTE_G3  196
+#define NOTE_A3  220
+#define NOTE_B3  247
+#define NOTE_REST 0
+
+const int MELODY_NOTES[] = { NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, NOTE_REST, NOTE_B3, NOTE_C4 };
+const int MELODY_DIVS[]  = { 4, 8, 8, 4, 4, 4, 4, 4 };
+const int MELODY_LEN     = 8;
 int melodyIdx = 0;
-bool melodyGapPhase = false;
-unsigned long melodyPhaseMs = 0;
 unsigned long melodyPhaseStart = 0;
+unsigned long melodyPhaseMs = 0;
+bool melodyGapPhase = false;
 
-HttpServer server(80);
+WebServerType server(80);
+WiFiUDP udpDiscovery;
 #if defined(ESP32)
 Preferences prefs;
 #endif
 
-/* ================= CONTROLE SEGURO DOS RELÉS ================== */
-inline int nivelLigado() {
-  return RELE_ATIVO_EM_LOW ? LOW : HIGH;
-}
-inline int nivelDesligado() {
-  return RELE_ATIVO_EM_LOW ? HIGH : LOW;
+struct EepromData {
+  uint32_t magic;
+  float rates[4];
+  char savedSsid[48];
+  char savedPass[64];
+  char savedCloudUrl[128];
+};
+const uint32_t EEPROM_MAGIC = 0xB473ADE5;
+
+/* ================= CONTROLE DE HARDWARE E PERSISTÊNCIA ====================== */
+inline uint8_t nivelLigado()    { return RELAY_ACTIVE_LOW ? LOW  : HIGH; }
+inline uint8_t nivelDesligado() { return RELAY_ACTIVE_LOW ? HIGH : LOW;  }
+
+void setPumpState(int idx, bool ligada) {
+  if (idx < 0 || idx >= 4) return;
+  digitalWrite(pumps[idx].pin, ligada ? nivelLigado() : nivelDesligado());
+  digitalWrite(PIN_LED, ligada ? HIGH : LOW);
 }
 
 void desligarTodasBombas() {
   for (int i = 0; i < 4; i++) {
     digitalWrite(pumps[i].pin, nivelDesligado());
   }
+  digitalWrite(PIN_LED, LOW);
+  noTone(PIN_BUZZER);
 }
 
-void ligarBomba(int idx) {
-  desligarTodasBombas();
-  if (idx >= 0 && idx < 4) {
-    digitalWrite(pumps[idx].pin, nivelLigado());
-  }
-}
-
-int findPumpIndex(const String& name) {
-  String lower = name;
-  lower.trim();
-  lower.toLowerCase();
+int findPumpIndex(const String& key) {
   for (int i = 0; i < 4; i++) {
-    if (lower == pumps[i].key) return i;
+    if (key.equalsIgnoreCase(pumps[i].key)) return i;
   }
   return -1;
 }
 
-/* ================= PERSISTÊNCIA FLASH (VAZÕES) ================ */
-#if defined(ESP8266)
-struct EepromCalib {
-  uint32_t magic;
-  float rates[4];
-};
-const uint32_t CALIB_MAGIC = 0xBA7E2026UL;
-
 void carregarCalibracao() {
-  EEPROM.begin(sizeof(EepromCalib));
-  EepromCalib c;
-  EEPROM.get(0, c);
-  if (c.magic == CALIB_MAGIC) {
+#if defined(ESP8266)
+  EEPROM.begin(sizeof(EepromData));
+  EepromData data;
+  EEPROM.get(0, data);
+  if (data.magic == EEPROM_MAGIC) {
     for (int i = 0; i < 4; i++) {
-      if (c.rates[i] > 1.0f && c.rates[i] <= 200.0f) {
-        pumps[i].flowMlPerSec = c.rates[i];
+      if (data.rates[i] > 1.0f && data.rates[i] <= 200.0f) {
+        pumps[i].flowMlPerSec = data.rates[i];
       }
     }
-  }
-  EEPROM.end();
-}
-
-void salvarCalibracao() {
-  EEPROM.begin(sizeof(EepromCalib));
-  EepromCalib c;
-  c.magic = CALIB_MAGIC;
-  for (int i = 0; i < 4; i++) {
-    c.rates[i] = pumps[i].flowMlPerSec;
-  }
-  EEPROM.put(0, c);
-  EEPROM.commit();
-  EEPROM.end();
-}
-#else
-void carregarCalibracao() {
-  prefs.begin("bartender", true);
-  for (int i = 0; i < 4; i++) {
-    float saved = prefs.getFloat(pumps[i].key, pumps[i].flowMlPerSec);
-    if (saved > 1.0f && saved <= 200.0f) {
-      pumps[i].flowMlPerSec = saved;
+    data.savedSsid[sizeof(data.savedSsid) - 1] = '\0';
+    data.savedPass[sizeof(data.savedPass) - 1] = '\0';
+    data.savedCloudUrl[sizeof(data.savedCloudUrl) - 1] = '\0';
+    if (strlen(data.savedSsid) > 0) {
+      runtimeWifiSsid = String(data.savedSsid);
+      runtimeWifiPass = String(data.savedPass);
+    }
+    if (strlen(data.savedCloudUrl) > 7) {
+      runtimeCloudSyncUrl = String(data.savedCloudUrl);
     }
   }
+#else
+  prefs.begin("bartender", true);
+  for (int i = 0; i < 4; i++) {
+    pumps[i].flowMlPerSec = prefs.getFloat(pumps[i].key, pumps[i].flowMlPerSec);
+  }
+  String sSsid = prefs.getString("wifi_ssid", "");
+  String sPass = prefs.getString("wifi_pass", "");
+  String sCloud = prefs.getString("cloud_url", "");
+  if (sSsid.length() > 0) {
+    runtimeWifiSsid = sSsid;
+    runtimeWifiPass = sPass;
+  }
+  if (sCloud.length() > 7) {
+    runtimeCloudSyncUrl = sCloud;
+  }
   prefs.end();
+#endif
 }
 
 void salvarCalibracao() {
+#if defined(ESP8266)
+  EepromData data;
+  memset(&data, 0, sizeof(EepromData));
+  data.magic = EEPROM_MAGIC;
+  for (int i = 0; i < 4; i++) {
+    data.rates[i] = pumps[i].flowMlPerSec;
+  }
+  strncpy(data.savedSsid, runtimeWifiSsid.c_str(), sizeof(data.savedSsid) - 1);
+  strncpy(data.savedPass, runtimeWifiPass.c_str(), sizeof(data.savedPass) - 1);
+  strncpy(data.savedCloudUrl, runtimeCloudSyncUrl.c_str(), sizeof(data.savedCloudUrl) - 1);
+  EEPROM.put(0, data);
+  EEPROM.commit();
+#else
   prefs.begin("bartender", false);
   for (int i = 0; i < 4; i++) {
     prefs.putFloat(pumps[i].key, pumps[i].flowMlPerSec);
   }
+  if (runtimeWifiSsid.length() > 0) {
+    prefs.putString("wifi_ssid", runtimeWifiSsid);
+    prefs.putString("wifi_pass", runtimeWifiPass);
+  }
+  if (runtimeCloudSyncUrl.length() > 7) {
+    prefs.putString("cloud_url", runtimeCloudSyncUrl);
+  }
   prefs.end();
-}
 #endif
-
-/* ================= AUXILIARES DE PARSING JSON SIMPLES ========= */
-String extractJsonString(const String& body, const char* key) {
-  String pattern = String("\"") + key + "\"";
-  int pos = body.indexOf(pattern);
-  if (pos < 0) return "";
-  int colon = body.indexOf(':', pos + pattern.length());
-  if (colon < 0) return "";
-  int q1 = body.indexOf('"', colon + 1);
-  if (q1 < 0) return "";
-  int q2 = body.indexOf('"', q1 + 1);
-  if (q2 < 0) return "";
-  return body.substring(q1 + 1, q2);
 }
 
-float extractJsonFloat(const String& body, const char* key, float fallback = -1.0f) {
-  String pattern = String("\"") + key + "\"";
-  int pos = body.indexOf(pattern);
-  if (pos < 0) return fallback;
-  int colon = body.indexOf(':', pos + pattern.length());
-  if (colon < 0) return fallback;
-  int start = colon + 1;
-  while (start < (int)body.length() && (body[start] == ' ' || body[start] == '\t')) start++;
-  int end = start;
-  while (end < (int)body.length() && (isDigit(body[end]) || body[end] == '.')) end++;
-  if (end == start) return fallback;
-  return body.substring(start, end).toFloat();
-}
+/* ================= PARSER DE RECEITAS E PRESETS ============================= */
+bool parsePlanString(String planStr) {
+  planStr.trim();
+  if (planStr.length() == 0) return false;
 
-/* ================= MONTAGEM E EXECUÇÃO DE PLANOS ============== */
-bool parsePlanString(const String& planStr) {
   planCount = 0;
-  planTotalMs = 0;
-  int start = 0;
+  totalExpectedMs = 0;
 
+  int start = 0;
   while (start < (int)planStr.length() && planCount < MAX_STEPS) {
     int comma = planStr.indexOf(',', start);
-    String token = (comma < 0) ? planStr.substring(start) : planStr.substring(start, comma);
+    if (comma == -1) comma = planStr.length();
+    String token = planStr.substring(start, comma);
     token.trim();
 
-    if (token.length() > 0) {
-      int c1 = token.indexOf(':');
-      int c2 = (c1 >= 0) ? token.indexOf(':', c1 + 1) : -1;
-      if (c1 > 0) {
-        String pName = token.substring(0, c1);
-        float ml = (c2 > 0) ? token.substring(c1 + 1, c2).toFloat() : token.substring(c1 + 1).toFloat();
-        unsigned long pauseMs = (c2 > 0) ? (unsigned long)token.substring(c2 + 1).toInt() : 1200UL;
+    int c1 = token.indexOf(':');
+    int c2 = token.indexOf(':', c1 + 1);
+    if (c1 > 0) {
+      String pumpKey = token.substring(0, c1);
+      float ml = (c2 > c1) ? token.substring(c1 + 1, c2).toFloat()
+                           : token.substring(c1 + 1).toFloat();
+      unsigned long pauseMs = (c2 > c1) ? (unsigned long)token.substring(c2 + 1).toInt() : 1000UL;
 
-        int pIdx = findPumpIndex(pName);
-        if (pIdx >= 0 && ml > 0.0f && ml <= 500.0f) {
-          unsigned long pourMs = (unsigned long)((ml / pumps[pIdx].flowMlPerSec) * 1000.0f);
-          plan[planCount] = { pIdx, ml, pourMs, pauseMs };
-          planTotalMs += pourMs + pauseMs;
-          planCount++;
-        }
+      int idx = findPumpIndex(pumpKey);
+      if (idx >= 0 && ml > 0.0f && ml <= 500.0f) {
+        unsigned long pourMs = (unsigned long)((ml / pumps[idx].flowMlPerSec) * 1000.0f);
+        if (pourMs < 150) pourMs = 150;
+        plan[planCount] = { idx, ml, pourMs, pauseMs };
+        totalExpectedMs += (pourMs + pauseMs);
+        planCount++;
       }
     }
-
-    if (comma < 0) break;
     start = comma + 1;
   }
 
+  if (totalExpectedMs == 0) totalExpectedMs = 1;
   return planCount > 0;
 }
 
-bool carregarPreset(const String& code) {
-  String upper = code;
-  upper.trim();
-  upper.toUpperCase();
-
-  if (upper == "RED") {
-    currentDrinkName = "Red Robotics";
-    return parsePlanString("vermelho:70:1500,azul:220:0");
+bool carregarPreset(String code) {
+  code.trim();
+  code.toUpperCase();
+  if (code == "1" || code == "GIN_TROPICAL") {
+    currentDrinkName = "Gin Tropical";
+    return parsePlanString("vermelho:70:1500,amarelo:50:1500,azul:220:0");
   }
-  if (upper == "YELLOW") {
-    currentDrinkName = "Yellow Web";
-    return parsePlanString("amarelo:100:1500,azul:250:0");
+  if (code == "2" || code == "GIN_ T" || code == "GIN_TONICA") {
+    currentDrinkName = "Gin Tonica";
+    return parsePlanString("vermelho:90:2000,azul:220:0");
   }
-  if (upper == "GREEN") {
-    currentDrinkName = "Green Games";
-    return parsePlanString("verde:101:1500,azul:250:0");
+  if (code == "3" || code == "GIN_M" || code == "SUNSET_CITRUS") {
+    currentDrinkName = "Sunset Citrus";
+    return parsePlanString("vermelho:60:1500,amarelo:50:1500,verde:40:1500,azul:190:0");
   }
-  if (upper == "MIX") {
-    currentDrinkName = "Mix Basics";
-    return parsePlanString("amarelo:50:1500,vermelho:50:1500,azul:270:0");
+  if (code == "4" || code == "EMERALD_SPRITZ") {
+    currentDrinkName = "Emerald Spritz";
+    return parsePlanString("vermelho:75:1500,verde:55:1500,azul:210:0");
+  }
+  if (code == "5" || code == "CITRUS_FIZZ") {
+    currentDrinkName = "Citrus Zero Fizz";
+    return parsePlanString("amarelo:80:1200,verde:45:1200,azul:225:0");
   }
   return false;
 }
 
-void iniciarPlano() {
+void iniciarPlano(bool fromCloud = false) {
   if (planCount <= 0) return;
-  completedMs = 0;
+  desligarTodasBombas();
+  startedByCloud = fromCloud;
   currentStep = 0;
   state = STATE_DOSING;
   stateStartMs = millis();
-  digitalWrite(PIN_LED, HIGH);
-  ligarBomba(plan[0].pumpIdx);
-  Serial.println("START:" + currentDrinkName);
+  jobStartMs = stateStartMs;
+  lastSerialProgressMs = 0;
+
+  setPumpState(plan[0].pumpIdx, true);
+  Serial.printf("START:%s:steps=%d\n", currentDrinkName.c_str(), planCount);
 }
 
 void paradaEmergencia() {
   desligarTodasBombas();
-  noTone(PIN_BUZZER);
-  digitalWrite(PIN_LED, LOW);
   state = STATE_STOPPED;
+  startedByCloud = false;
   Serial.println("STOPPED");
 }
 
 int calcularProgresso() {
+  if (state == STATE_IDLE) return 0;
   if (state == STATE_DONE) return 100;
   if (state == STATE_MELODY) return 98;
-  if (state != STATE_DOSING && state != STATE_PAUSING) return 0;
-  if (planTotalMs == 0) return 50;
-
-  unsigned long atual = completedMs + (millis() - stateStartMs);
-  int pct = (int)((atual * 96UL) / planTotalMs);
-  if (pct < 2) pct = 2;
+  unsigned long elapsed = millis() - jobStartMs;
+  int pct = (int)((elapsed * 95UL) / totalExpectedMs);
+  if (pct < 3) pct = 3;
   if (pct > 96) pct = 96;
   return pct;
 }
 
 const char* stateToString() {
   switch (state) {
-    case STATE_DOSING:
+    case STATE_IDLE:    return "idle";
+    case STATE_DOSING:  return "dispensing";
     case STATE_PAUSING: return "dispensing";
-    case STATE_MELODY: return "melody";
-    case STATE_DONE: return "done";
+    case STATE_MELODY:  return "dispensing";
+    case STATE_DONE:    return "done";
     case STATE_STOPPED: return "stopped";
-    default: return "idle";
+    default:            return "idle";
   }
 }
 
-/* ================= ATUALIZAÇÃO DA MÁQUINA DE ESTADOS ========== */
+/* ================= MÁQUINA DE ESTADOS NÃO-BLOQUEANTE ======================== */
 void iniciarMelodia() {
   desligarTodasBombas();
   state = STATE_MELODY;
   melodyIdx = 0;
   melodyGapPhase = false;
-  melodyPhaseMs = 1000UL / MELODY_DIVS[0];
   melodyPhaseStart = millis();
-
+  melodyPhaseMs = 1000UL / MELODY_DIVS[0];
   if (MELODY_NOTES[0] != NOTE_REST) {
     digitalWrite(PIN_LED, HIGH);
     tone(PIN_BUZZER, MELODY_NOTES[0], melodyPhaseMs);
@@ -386,12 +430,14 @@ void atualizarMaquinaEstados() {
   unsigned long now = millis();
 
   if (state == STATE_DOSING) {
-    DoseStep& s = plan[currentStep];
-    if (now - stateStartMs >= s.pourMs) {
-      desligarTodasBombas();
-      completedMs += s.pourMs;
-
-      if (s.pauseMs > 0) {
+    PlanStep& st = plan[currentStep];
+    if (now - lastSerialProgressMs >= 400) {
+      lastSerialProgressMs = now;
+      Serial.printf("PROGRESS:%d:%s\n", calcularProgresso(), pumps[st.pumpIdx].key);
+    }
+    if (now - stateStartMs >= st.pourMs) {
+      setPumpState(st.pumpIdx, false);
+      if (st.pauseMs > 0) {
         state = STATE_PAUSING;
         stateStartMs = now;
       } else {
@@ -400,24 +446,20 @@ void atualizarMaquinaEstados() {
           iniciarMelodia();
         } else {
           stateStartMs = now;
-          ligarBomba(plan[currentStep].pumpIdx);
+          setPumpState(plan[currentStep].pumpIdx, true);
         }
       }
-    } else if (now - lastSerialReportMs >= 400) {
-      lastSerialReportMs = now;
-      Serial.printf("PROGRESS:%d:%s\n", calcularProgresso(), pumps[s.pumpIdx].key);
     }
   } else if (state == STATE_PAUSING) {
-    DoseStep& s = plan[currentStep];
-    if (now - stateStartMs >= s.pauseMs) {
-      completedMs += s.pauseMs;
+    PlanStep& st = plan[currentStep];
+    if (now - stateStartMs >= st.pauseMs) {
       currentStep++;
       if (currentStep >= planCount) {
         iniciarMelodia();
       } else {
         state = STATE_DOSING;
         stateStartMs = now;
-        ligarBomba(plan[currentStep].pumpIdx);
+        setPumpState(plan[currentStep].pumpIdx, true);
       }
     }
   } else if (state == STATE_MELODY) {
@@ -452,7 +494,282 @@ void atualizarMaquinaEstados() {
   }
 }
 
-/* ================= ROTAS HTTP (WI-FI JSON API) ================ */
+/* ================= PARSER JSON LEVE ========================================= */
+String extractJsonString(const String& body, const char* key) {
+  String pattern = String("\"") + key + "\"";
+  int kPos = body.indexOf(pattern);
+  if (kPos < 0) return "";
+  int colon = body.indexOf(':', kPos + pattern.length());
+  if (colon < 0) return "";
+  int q1 = body.indexOf('"', colon + 1);
+  if (q1 < 0) return "";
+  int q2 = body.indexOf('"', q1 + 1);
+  if (q2 < 0) return "";
+  return body.substring(q1 + 1, q2);
+}
+
+float extractJsonFloat(const String& body, const char* key, float fallback = 0.0f) {
+  String pattern = String("\"") + key + "\"";
+  int kPos = body.indexOf(pattern);
+  if (kPos < 0) return fallback;
+  int colon = body.indexOf(':', kPos + pattern.length());
+  if (colon < 0) return fallback;
+  int start = colon + 1;
+  while (start < (int)body.length() && (body[start] == ' ' || body[start] == '"')) start++;
+  int end = start;
+  while (end < (int)body.length() &&
+         ((body[end] >= '0' && body[end] <= '9') || body[end] == '.' || body[end] == '-')) {
+    end++;
+  }
+  if (end <= start) return fallback;
+  return body.substring(start, end).toFloat();
+}
+
+/* ================= SINCRONIZAÇÃO NUVEM IOT (v3) ============================= */
+void sincronizarNuvemIoT() {
+  if (runtimeCloudSyncUrl.length() == 0 || WiFi.status() != WL_CONNECTED) return;
+
+  // Se estiver preparando um drink iniciado via LAN HTTP (v2/v3) ou USB Serial, não faz polling HTTP externo!
+  if ((state == STATE_DOSING || state == STATE_PAUSING || state == STATE_MELODY) && !startedByCloud) {
+    return;
+  }
+
+  unsigned long now = millis();
+  unsigned long interval = (state == STATE_DOSING || state == STATE_PAUSING)
+                             ? 450UL
+                             : (cloudServerReachable ? 900UL : 8000UL);
+  if (now - lastCloudSyncMs < interval) return;
+
+  if (state == STATE_DOSING && currentStep < planCount) {
+    unsigned long elapsedStep = now - stateStartMs;
+    if (plan[currentStep].pourMs <= elapsedStep + 450UL) {
+      return;
+    }
+  }
+  if (state == STATE_MELODY) return;
+
+  lastCloudSyncMs = now;
+
+  String curPump = "";
+  if (state == STATE_DOSING && currentStep < planCount) {
+    curPump = pumps[plan[currentStep].pumpIdx].key;
+  }
+
+  String reqJson = "{";
+  reqJson += "\"state\":\"" + String(stateToString()) + "\",";
+  reqJson += "\"progress\":" + String(calcularProgresso()) + ",";
+  reqJson += "\"current_pump\":\"" + curPump + "\",";
+  reqJson += "\"step\":" + String(currentStep + 1) + ",";
+  reqJson += "\"total_steps\":" + String(planCount) + ",";
+  reqJson += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  reqJson += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  reqJson += "\"device\":\"" + String(DEVICE_MODEL) + "\"";
+  reqJson += "}";
+
+  String urlStr = runtimeCloudSyncUrl;
+  HTTPClient http;
+  http.setTimeout(cloudServerReachable ? 800 : 300);
+  int httpCode = -1;
+  String respBody = "";
+
+  if (urlStr.startsWith("https://")) {
+#if defined(ESP8266)
+    BearSSL::WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    if (http.begin(secureClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", runtimeApiToken);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+#else
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    if (http.begin(secureClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", runtimeApiToken);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+#endif
+  } else {
+    WiFiClient plainClient;
+    plainClient.setTimeout(cloudServerReachable ? 800 : 300);
+    if (http.begin(plainClient, urlStr)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Machine-Token", runtimeApiToken);
+      httpCode = http.POST(reqJson);
+      if (httpCode == 200) respBody = http.getString();
+      http.end();
+    }
+  }
+
+  cloudServerReachable = (httpCode > 0);
+
+  if (httpCode == 200 && state == STATE_DONE) {
+    state = STATE_IDLE;
+  }
+
+  if (httpCode != 200 || respBody.length() == 0) return;
+
+  String cmd = extractJsonString(respBody, "command");
+  if (cmd == "stop") {
+    paradaEmergencia();
+  } else if (cmd == "dispense" && state != STATE_DOSING && state != STATE_PAUSING) {
+    String dName = extractJsonString(respBody, "drink_name");
+    String planStr = extractJsonString(respBody, "plan");
+    if (planStr.length() > 0 && parsePlanString(planStr)) {
+      currentDrinkName = (dName.length() > 0) ? dName : "Drink App";
+      iniciarPlano(true);
+    }
+  } else if (cmd == "update_pumps") {
+    bool changed = false;
+    for (int i = 0; i < 4; i++) {
+      float val = extractJsonFloat(respBody, pumps[i].key, -1.0f);
+      if (val > 1.0f && val <= 200.0f) {
+        pumps[i].flowMlPerSec = val;
+        changed = true;
+      }
+    }
+    if (changed) salvarCalibracao();
+  }
+}
+
+/* ================= CONEXÃO MULTI-WIFI E AUTODESCOBERTA UDP ================== */
+bool tentarConexaoWifi(const char* ssid, const char* pass, unsigned long timeoutMs = 10500) {
+  if (!ssid || strlen(ssid) == 0 || String(ssid) == "SEU_WIFI_AQUI" || String(ssid) == "WIFI_DO_BAR_2.4G") {
+    return false;
+  }
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == String(ssid)) {
+    return true;
+  }
+  Serial.printf("Conectando ao Wi-Fi '%s'", ssid);
+  WiFi.begin(ssid, pass ? pass : "");
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) {
+    delay(200);
+    Serial.print(".");
+  }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
+void conectarRede() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
+
+  bool conectado = false;
+  bool tentouAlgumaVisivel = false;
+
+  int n = WiFi.scanNetworks();
+  if (n > 0) {
+    if (runtimeWifiSsid.length() > 0) {
+      for (int i = 0; i < n; i++) {
+        if (WiFi.SSID(i) == runtimeWifiSsid) {
+          tentouAlgumaVisivel = true;
+          conectado = tentarConexaoWifi(runtimeWifiSsid.c_str(), runtimeWifiPass.c_str(), 10500);
+          break;
+        }
+      }
+    }
+
+    if (!conectado) {
+      for (int i = 0; i < n && !conectado; i++) {
+        String foundSsid = WiFi.SSID(i);
+        for (int k = 0; k < KNOWN_NETWORKS_COUNT; k++) {
+          if (strlen(KNOWN_NETWORKS[k].ssid) > 0 && foundSsid == String(KNOWN_NETWORKS[k].ssid)) {
+            tentouAlgumaVisivel = true;
+            conectado = tentarConexaoWifi(KNOWN_NETWORKS[k].ssid, KNOWN_NETWORKS[k].pass, 10500);
+            if (conectado) break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!conectado && !tentouAlgumaVisivel && runtimeWifiSsid.length() > 0) {
+    conectado = tentarConexaoWifi(runtimeWifiSsid.c_str(), runtimeWifiPass.c_str(), 9000);
+  }
+  if (!conectado && !tentouAlgumaVisivel && strlen(WIFI_SSID) > 0) {
+    conectado = tentarConexaoWifi(WIFI_SSID, WIFI_PASSWORD, 9000);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("Wi-Fi conectado em '%s'! IP: %s\n",
+                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+  } else {
+    Serial.printf("Modo Access Point ativo: '%s' | IP: %s (Portal Web em http://192.168.4.1)\n",
+                  AP_SSID, WiFi.softAPIP().toString().c_str());
+  }
+
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS ativo: http://%s.local\n", MDNS_HOSTNAME);
+  }
+
+  udpDiscovery.begin(UDP_DISCOVERY_PORT);
+}
+
+void processarDescobertaUdp() {
+  int packetSize = udpDiscovery.parsePacket();
+  if (packetSize <= 0) return;
+
+  char buf[384];
+  int len = udpDiscovery.read(buf, sizeof(buf) - 1);
+  if (len <= 0) return;
+  buf[len] = '\0';
+
+  String msg = String(buf);
+  msg.trim();
+  if (!msg.startsWith("BARTENDER_DISCOVER")) return;
+
+  int p1 = msg.indexOf('|');
+  if (p1 > 0) {
+    int p2 = msg.indexOf('|', p1 + 1);
+    String newSyncUrl = (p2 > p1) ? msg.substring(p1 + 1, p2) : msg.substring(p1 + 1);
+    String newToken   = (p2 > p1) ? msg.substring(p2 + 1) : "";
+    newSyncUrl.trim();
+    newToken.trim();
+    bool changed = false;
+    if (newSyncUrl.startsWith("http") && newSyncUrl != runtimeCloudSyncUrl) {
+      runtimeCloudSyncUrl = newSyncUrl;
+      changed = true;
+    }
+    if (newToken.length() > 0 && newToken != runtimeApiToken) {
+      runtimeApiToken = newToken;
+      changed = true;
+    }
+    cloudServerReachable = true;
+    if (changed) {
+      salvarCalibracao();
+      Serial.printf("Cloud Sync URL sincronizada via UDP: %s\n", runtimeCloudSyncUrl.c_str());
+    }
+  }
+
+  String ipStr = (WiFi.status() == WL_CONNECTED)
+                   ? WiFi.localIP().toString()
+                   : WiFi.softAPIP().toString();
+  int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+
+  String reply = "{";
+  reply += "\"ok\":true,";
+  reply += "\"service\":\"bartender-esp\",";
+  reply += "\"version\":\"3.0\",";
+  reply += "\"device\":\"" + String(DEVICE_MODEL) + "\",";
+  reply += "\"ip\":\"" + ipStr + "\",";
+  reply += "\"port\":80,";
+  reply += "\"ssid\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String(AP_SSID)) + "\",";
+  reply += "\"rssi\":" + String(rssi);
+  reply += "}";
+
+  udpDiscovery.beginPacket(udpDiscovery.remoteIP(), udpDiscovery.remotePort());
+  udpDiscovery.write((const uint8_t*)reply.c_str(), reply.length());
+  udpDiscovery.endPacket();
+}
+
+/* ================= ROTAS HTTP (WI-FI JSON API LOCAL v2 & v3) ================ */
 void sendCorsHeaders() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -460,15 +777,38 @@ void sendCorsHeaders() {
 }
 
 bool verificarTokenHttp() {
-  if (strlen(API_TOKEN) == 0) return true;
-  if (server.header("X-Bartender-Token") == String(API_TOKEN)) return true;
-  server.send(401, "application/json", "{\"ok\":false,\"error\":\"Token invalido ou ausente\"}");
+  // Permite controle fluido na LAN tanto pela v2 (sem token) quanto pela v3 (com token)
+  String sent = server.header("X-Bartender-Token");
+  if (sent.length() == 0 || runtimeApiToken.length() == 0) return true;
+  if (sent == runtimeApiToken) return true;
+  server.send(401, "application/json", "{\"ok\":false,\"error\":\"Token invalido\"}");
   return false;
 }
 
 void handleOptions() {
   sendCorsHeaders();
   server.send(204);
+}
+
+void handleRootPortal() {
+  sendCorsHeaders();
+  String ipStr = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+  String ssidStr = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String("AP: ") + AP_SSID;
+  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<title>Bartender.OS · Config Wi-Fi</title>";
+  html += "<style>body{font-family:sans-serif;background:#fffaf3;color:#2d1810;padding:20px;max-width:460px;margin:auto}";
+  html += ".card{background:#fff;border:1px solid #ead0b2;border-radius:16px;padding:18px;margin-bottom:16px}";
+  html += "input,button{width:100%;padding:10px;margin-top:8px;border-radius:10px;border:1px solid #d6b48c;box-sizing:border-box}";
+  html += "button{background:#ea580c;color:#fff;border:none;font-weight:bold;cursor:pointer}</style></head><body>";
+  html += "<h2>🍹 Bartender.OS v2 + v3 (" + String(DEVICE_MODEL) + ")</h2>";
+  html += "<div class='card'><b>Rede Atual:</b> " + ssidStr + "<br><b>IP:</b> " + ipStr + "<br><b>Cloud Sync:</b> " + runtimeCloudSyncUrl + "</div>";
+  html += "<div class='card'><h3>Conectar a Novo Wi-Fi 2.4 GHz</h3>";
+  html += "<input id='s' placeholder='Nome do Wi-Fi (SSID)' value='" + runtimeWifiSsid + "'>";
+  html += "<input id='p' type='password' placeholder='Senha do Wi-Fi'>";
+  html += "<input id='c' placeholder='URL Cloud Sync (opcional)' value='" + runtimeCloudSyncUrl + "'>";
+  html += "<button onclick=\"fetch('/config/wifi',{method:'POST',body:JSON.stringify({ssid:document.getElementById('s').value,password:document.getElementById('p').value,cloud_sync_url:document.getElementById('c').value})}).then(r=>r.json()).then(d=>alert('IP: '+(d.ip||'Conectando...')))\">Salvar e Conectar</button></div>";
+  html += "</body></html>";
+  server.send(200, "text/html", html);
 }
 
 void handleStatus() {
@@ -481,9 +821,11 @@ void handleStatus() {
                    ? WiFi.localIP().toString()
                    : WiFi.softAPIP().toString();
   int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+  String ssidStr = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String(AP_SSID);
 
   String json = "{";
   json += "\"ok\":true,";
+  json += "\"service\":\"bartender-esp\",";
   json += "\"device\":\"" + String(DEVICE_MODEL) + "\",";
   json += "\"state\":\"" + String(stateToString()) + "\",";
   json += "\"drink_name\":\"" + currentDrinkName + "\",";
@@ -492,14 +834,15 @@ void handleStatus() {
   json += "\"step_index\":" + String(currentStep + 1) + ",";
   json += "\"total_steps\":" + String(planCount) + ",";
   json += "\"ip\":\"" + ipStr + "\",";
+  json += "\"ssid\":\"" + ssidStr + "\",";
   json += "\"rssi\":" + String(rssi) + ",";
+  json += "\"cloud_sync_url\":\"" + runtimeCloudSyncUrl + "\",";
   json += "\"pumps\":{";
   for (int i = 0; i < 4; i++) {
     json += "\"" + String(pumps[i].key) + "\":" + String(pumps[i].flowMlPerSec, 1);
     if (i < 3) json += ",";
   }
   json += "}}";
-
   server.send(200, "application/json", json);
 }
 
@@ -523,7 +866,6 @@ void handleDispense() {
   } else if (preset.length() > 0) {
     ok = carregarPreset(preset);
   } else {
-    // Suporte direto a JSON com volumes por bomba: {"amarelo":50,"azul":200}
     String built = "";
     for (int i = 0; i < 4; i++) {
       float v = extractJsonFloat(body, pumps[i].key, 0.0f);
@@ -541,7 +883,7 @@ void handleDispense() {
     return;
   }
 
-  iniciarPlano();
+  iniciarPlano(false);
   server.send(202, "application/json", "{\"ok\":true,\"state\":\"dispensing\"}");
 }
 
@@ -569,7 +911,46 @@ void handleConfigPumps() {
   handleStatus();
 }
 
-/* ================= COMANDOS VIA USB SERIAL ==================== */
+void handleConfigCloud() {
+  sendCorsHeaders();
+  String body = server.arg("plain");
+  String newUrl = extractJsonString(body, "cloud_sync_url");
+  String newTok = extractJsonString(body, "api_token");
+  newUrl.trim();
+  newTok.trim();
+  if (newUrl.startsWith("http")) {
+    runtimeCloudSyncUrl = newUrl;
+  }
+  if (newTok.length() > 0) {
+    runtimeApiToken = newTok;
+  }
+  cloudServerReachable = true;
+  salvarCalibracao();
+  handleStatus();
+}
+
+void handleConfigWifi() {
+  sendCorsHeaders();
+  String body = server.arg("plain");
+  String newSsid = extractJsonString(body, "ssid");
+  String newPass = extractJsonString(body, "password");
+  String newCloud = extractJsonString(body, "cloud_sync_url");
+  String newTok = extractJsonString(body, "api_token");
+  newSsid.trim();
+  newCloud.trim();
+  newTok.trim();
+  if (newCloud.startsWith("http")) runtimeCloudSyncUrl = newCloud;
+  if (newTok.length() > 0) runtimeApiToken = newTok;
+  if (newSsid.length() > 0) {
+    runtimeWifiSsid = newSsid;
+    runtimeWifiPass = newPass;
+    salvarCalibracao();
+    tentarConexaoWifi(runtimeWifiSsid.c_str(), runtimeWifiPass.c_str(), 10500);
+  }
+  handleStatus();
+}
+
+/* ================= COMANDOS VIA USB SERIAL ================================== */
 void processarSerial() {
   if (!Serial.available()) return;
 
@@ -585,6 +966,43 @@ void processarSerial() {
     Serial.printf("STATE:%s:%d\n", stateToString(), calcularProgresso());
     return;
   }
+  if (cmd.equalsIgnoreCase("NETINFO")) {
+    String ipStr = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+    String ssidStr = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : String(AP_SSID);
+    Serial.printf("NETINFO:{\"ok\":true,\"ip\":\"%s\",\"ssid\":\"%s\",\"connected\":%s}\n",
+                  ipStr.c_str(), ssidStr.c_str(), (WiFi.status() == WL_CONNECTED ? "true" : "false"));
+    return;
+  }
+  if (cmd.startsWith("CLOUD:")) {
+    String newUrl = cmd.substring(6);
+    newUrl.trim();
+    if (newUrl.startsWith("http")) {
+      runtimeCloudSyncUrl = newUrl;
+      cloudServerReachable = true;
+      salvarCalibracao();
+      Serial.println("CLOUD_OK:" + runtimeCloudSyncUrl);
+    }
+    return;
+  }
+  if (cmd.startsWith("WIFI:")) {
+    String rest = cmd.substring(5);
+    int tab = rest.indexOf('\t');
+    if (tab > 0) {
+      runtimeWifiSsid = rest.substring(0, tab);
+      runtimeWifiPass = rest.substring(tab + 1);
+    } else {
+      runtimeWifiSsid = rest;
+      runtimeWifiPass = "";
+    }
+    runtimeWifiSsid.trim();
+    if (runtimeWifiSsid.length() > 0) {
+      salvarCalibracao();
+      tentarConexaoWifi(runtimeWifiSsid.c_str(), runtimeWifiPass.c_str(), 7000);
+      String ipStr = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+      Serial.printf("WIFI_OK:%s\n", ipStr.c_str());
+    }
+    return;
+  }
 
   if (state == STATE_DOSING || state == STATE_PAUSING || state == STATE_MELODY) {
     Serial.println("BUSY");
@@ -594,49 +1012,19 @@ void processarSerial() {
   if (cmd.startsWith("PLAN:")) {
     currentDrinkName = "Drink Serial";
     if (parsePlanString(cmd.substring(5))) {
-      iniciarPlano();
+      iniciarPlano(false);
     } else {
       Serial.println("CMD_ERR");
     }
   } else if (carregarPreset(cmd)) {
-    iniciarPlano();
+    iniciarPlano(false);
   } else {
     Serial.println("CMD_ERR");
   }
 }
 
-/* ================= INICIALIZAÇÃO ============================== */
-void conectarRede() {
-  WiFi.mode(WIFI_STA);
-  if (String(WIFI_SSID) != "SEU_WIFI_AQUI" && strlen(WIFI_SSID) > 0) {
-    Serial.printf("Conectando ao Wi-Fi '%s'", WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
-      delay(250);
-      Serial.print(".");
-    }
-    Serial.println();
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("Wi-Fi conectado! IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
-    Serial.printf("Modo Access Point ativo: '%s' | IP: %s\n",
-                  AP_SSID, WiFi.softAPIP().toString().c_str());
-  }
-
-  if (MDNS.begin(MDNS_HOSTNAME)) {
-    MDNS.addService("http", "tcp", 80);
-    Serial.printf("mDNS ativo: http://%s.local\n", MDNS_HOSTNAME);
-  }
-}
-
+/* ================= INICIALIZAÇÃO E LOOP PRINCIPAL =========================== */
 void setup() {
-  // Pré-carrega nível DESLIGADO antes do pinMode para evitar pulsos nos relés no boot
   for (int i = 0; i < 4; i++) {
     digitalWrite(pumps[i].pin, nivelDesligado());
     pinMode(pumps[i].pin, OUTPUT);
@@ -649,11 +1037,12 @@ void setup() {
 
   Serial.begin(115200);
   delay(200);
-  Serial.printf("\n=== Bartender Automatico v2.0 (%s) ===\n", DEVICE_MODEL);
+  Serial.printf("\n=== Bartender.OS Unificado v2 + v3 (%s) ===\n", DEVICE_MODEL);
 
   carregarCalibracao();
   conectarRede();
 
+  server.on("/", HTTP_GET, handleRootPortal);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/status", HTTP_OPTIONS, handleOptions);
   server.on("/dispense", HTTP_POST, handleDispense);
@@ -662,6 +1051,10 @@ void setup() {
   server.on("/stop", HTTP_OPTIONS, handleOptions);
   server.on("/config/pumps", HTTP_POST, handleConfigPumps);
   server.on("/config/pumps", HTTP_OPTIONS, handleOptions);
+  server.on("/config/cloud", HTTP_POST, handleConfigCloud);
+  server.on("/config/cloud", HTTP_OPTIONS, handleOptions);
+  server.on("/config/wifi", HTTP_POST, handleConfigWifi);
+  server.on("/config/wifi", HTTP_OPTIONS, handleOptions);
 
 #if defined(ESP8266)
   server.collectHeaders("X-Bartender-Token");
@@ -671,14 +1064,46 @@ void setup() {
 #endif
 
   server.begin();
-  Serial.println("Servidor HTTP pronto na porta 80!");
+  ArduinoOTA.setHostname(MDNS_HOSTNAME);
+  ArduinoOTA.onStart([]() { desligarTodasBombas(); });
+  ArduinoOTA.begin();
+  Serial.println("HTTP (80) + Descoberta UDP (4210) + ArduinoOTA (Wi-Fi Upload) prontos!");
 }
 
 void loop() {
 #if defined(ESP8266)
   MDNS.update();
 #endif
+  ArduinoOTA.handle();
+  processarDescobertaUdp();
   server.handleClient();
   processarSerial();
   atualizarMaquinaEstados();
+  sincronizarNuvemIoT();
+
+  // Reconexão automática caso o roteador/Hotspot seja ligado depois do ESP
+  if (WiFi.status() != WL_CONNECTED && state != STATE_DOSING && state != STATE_PAUSING && state != STATE_MELODY) {
+    static unsigned long lastWifiRetryMs = 0;
+    if (millis() - lastWifiRetryMs >= 25000UL) {
+      lastWifiRetryMs = millis();
+      int n = WiFi.scanNetworks();
+      bool ok = false;
+      if (n > 0 && runtimeWifiSsid.length() > 0) {
+        for (int i = 0; i < n && !ok; i++) {
+          if (WiFi.SSID(i) == runtimeWifiSsid) {
+            ok = tentarConexaoWifi(runtimeWifiSsid.c_str(), runtimeWifiPass.c_str(), 10500);
+          }
+        }
+      }
+      for (int i = 0; i < n && !ok; i++) {
+        String foundSsid = WiFi.SSID(i);
+        for (int k = 0; k < KNOWN_NETWORKS_COUNT && !ok; k++) {
+          if (strlen(KNOWN_NETWORKS[k].ssid) > 0 && foundSsid == String(KNOWN_NETWORKS[k].ssid)) {
+            ok = tentarConexaoWifi(KNOWN_NETWORKS[k].ssid, KNOWN_NETWORKS[k].pass, 10500);
+          }
+        }
+      }
+      if (ok) MDNS.begin(MDNS_HOSTNAME);
+    }
+  }
 }

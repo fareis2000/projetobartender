@@ -1,3 +1,16 @@
+/**
+ * @file TropicalDecor.tsx
+ * @description Ilustrações vetoriais SVG decorativas de ambientação tropical (folhagens + pôr do sol).
+ *
+ * Papel na Arquitetura Visual / Performance Offline:
+ * --------------------------------------------------
+ * Fornece toda a cenografia de "Bar de Praia / Verão" usando SVGs inline ultraleves (< 4 KB)
+ * em vez de imagens bitmap pesadas (PNG/JPEG externas):
+ *   - Carregamento instantâneo 100% offline em redes locais de eventos sem acesso à internet;
+ *   - Nitidez infinita em telas Retina / 4K de totens verticais;
+ *   - `pointer-events-none` e `-z-10` em `TropicalBackdropLeaves` garantem que os elementos
+ *     decorativos nunca interceptem cliques ou gestos touch dos usuários.
+ */
 import React from 'react';
 
 /**
@@ -129,4 +142,3 @@ export const TropicalHeroArt: React.FC = () => {
     </div>
   );
 };
-

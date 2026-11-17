@@ -1,16 +1,41 @@
+/**
+ * @file PreparationModal.tsx
+ * @description Modal de telemetria ao vivo durante a preparação do drink com botão de Parada de Emergência.
+ *
+ * Papel na Arquitetura / Segurança Operacional:
+ * ---------------------------------------------
+ * Abre automaticamente em todas as telas conectadas ao WebSocket (`/api/ws`) assim que
+ * `status.state === 'dispensing'`:
+ *   - Exibe o copo `GlassArtwork` enchendo gradualmente de `0%` a `100%` com o feixe líquido
+ *     na cor exata da bomba ligada naquele instante (`activePumpColor`);
+ *   - Mostra cronômetro ao vivo (`elapsed_seconds` vs `total_seconds`) e o meio de transporte ativo;
+ *   - Destaca em vermelho de alto contraste o botão **"Parar Agora (Desligar Bombas)"**,
+ *     permitindo que qualquer operador ou usuário interrompa os motores instantaneamente caso o
+ *     copo seja removido antes do fim;
+ *   - Ao concluir (`completed`), comemora visualmente e libera o fechamento do modal.
+ */
 import React from 'react';
 import { CheckCircle2, OctagonAlert, PartyPopper, XCircle } from 'lucide-react';
 import type { PreparationStatus, PumpConfig, PumpId } from '../types/bartender';
 import { GlassArtwork } from './GlassArtwork';
 
+/** Propriedades do componente `PreparationModal`. */
 interface PreparationModalProps {
+  /** Controla se o overlay modal está visível na tela. */
   visible: boolean;
+  /** Telemetria instantânea atualizada continuamente via WebSocket. */
   status: PreparationStatus;
+  /** Dicionário das 4 bombas para traduzir `current_pump` em nome da bebida e cor hexadecimal. */
   pumpsById: Record<PumpId, PumpConfig>;
+  /** Aciona o corte imediato de energia dos relés (`POST /api/stop`). */
   onEmergencyStop: () => void;
+  /** Fecha o modal após finalização, erro ou parada manual. */
   onClose: () => void;
 }
 
+/**
+ * Janela modal bloqueante para acompanhamento visual do preparo e controle de segurança.
+ */
 export const PreparationModal: React.FC<PreparationModalProps> = ({
   visible,
   status,
@@ -25,6 +50,7 @@ export const PreparationModal: React.FC<PreparationModalProps> = ({
   const isStopped = status.state === 'stopped';
   const isError = status.state === 'error';
 
+  // Cor hexadecimal do ingrediente que está jorrando na mangueira ativa neste exato momento
   const activePumpColor = status.current_pump
     ? pumpsById[status.current_pump]?.color_hex ?? '#ea580c'
     : null;

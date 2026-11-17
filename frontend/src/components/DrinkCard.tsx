@@ -1,21 +1,44 @@
+/**
+ * @file DrinkCard.tsx
+ * @description Card de vitrine comercial de uma receita do cardápio com visualização proporcional em camadas.
+ *
+ * Papel na Arquitetura / Vendas em Totem:
+ * ---------------------------------------
+ * Transforma dados técnicos da receita (`steps`, `total_ml`, `estimated_seconds`) em um card
+ * altamente apetitoso e informativo:
+ *   - Renderiza o copo vetorial `GlassArtwork` com a altura e a cor exatas de cada ingrediente
+ *     atualmente instalado nas bombas (`pumpsById`);
+ *   - Exibe no canto superior o volume total (`ml`) e o tempo estimado arredondado para cima (`s`);
+ *   - Mostra uma barra segmentada horizontal de proporção + etiquetas individuais com mililitros;
+ *   - Desabilita automaticamente o botão de pedido (`disabled`) enquanto outra bebida está em preparo.
+ */
 import React from 'react';
 import { Clock, Droplets, GlassWater } from 'lucide-react';
 import type { DrinkRecipe, PumpConfig, PumpId } from '../types/bartender';
 import { GlassArtwork } from './GlassArtwork';
 
+/** Propriedades do componente `DrinkCard`. */
 interface DrinkCardProps {
+  /** Receita completa vinda do backend com métricas calculadas. */
   drink: DrinkRecipe;
+  /** Mapa de bombas indexado por ID para resolver cores e nomes atualizados das garrafas. */
   pumpsById: Record<PumpId, PumpConfig>;
+  /** Desativa o botão de disparo quando a máquina já está ocupada (`status.state === 'dispensing'`). */
   disabled: boolean;
+  /** Callback acionado ao clicar em "Preparar Drink". */
   onDispense: (drink: DrinkRecipe) => void;
 }
 
+/**
+ * Cartão individual de coquetel exibido na grade do Cardápio.
+ */
 export const DrinkCard: React.FC<DrinkCardProps> = ({
   drink,
   pumpsById,
   disabled,
   onDispense,
 }) => {
+  // Converte cada etapa da receita em uma camada cromática proporcional para o copo SVG
   const layers = drink.steps.map((s) => ({
     color: pumpsById[s.pump]?.color_hex ?? drink.glass_color,
     ml: s.ml,
@@ -68,6 +91,7 @@ export const DrinkCard: React.FC<DrinkCardProps> = ({
 
         {/* Ingredientes e Proporções */}
         <div className="mt-auto space-y-2.5 mb-5">
+          {/* Barra horizontal de composição volumétrica (%) */}
           <div className="h-2.5 w-full rounded-full bg-[#f3e3ce] overflow-hidden flex p-0.5 gap-0.5">
             {drink.steps.map((step, i) => {
               const pct = drink.total_ml > 0 ? (step.ml / drink.total_ml) * 100 : 0;

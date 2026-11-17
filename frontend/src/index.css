@@ -1,3 +1,20 @@
+/*
+ * ============================================================================
+ * SISTEMA DE DESIGN VISUAL — BARTENDER TROPICAL (Tailwind CSS v4)
+ * ============================================================================
+ * Papel na Arquitetura de UX / Vendas:
+ *   Define a identidade sensorial quente ("Resort de Praia & Coquetelaria Artesanal")
+ *   projetada para alta atratividade em totens touch e dispositivos móveis:
+ *     - Tipografia editorial combinando `Fraunces` (títulos com personalidade) e
+ *       `Plus Jakarta Sans` (leitura limpa de métricas em ml e segundos).
+ *     - Animações aceleradas por GPU (`transform` / `opacity`) para borbulhas de gás
+ *       subindo no copo (`floatBubble`), jato líquido pulsante (`pulseStream`) e
+ *       folhagens ao vento (`breezeLeft` / `breezeRight`), mantendo 60 FPS mesmo em
+ *       tablets intermediários dedicados a eventos.
+ *     - Superfícies táteis `.linen-card` e controles deslizantes customizados
+ *       (`input[type="range"].pump-slider`) com thumb ampliado (22px) para uso fácil com o dedo.
+ * ============================================================================
+ */
 @import "tailwindcss";
 
 @layer base {
@@ -5,6 +22,7 @@
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     color: #2d1810;
     background-color: #fff8ed;
+    /* Iluminação atmosférica multicamada simulando luz solar dourada e reflexos tropicais */
     background-image:
       radial-gradient(circle at 50% 0%, rgba(255, 214, 138, 0.55) 0%, rgba(255, 166, 98, 0.14) 45%, transparent 72%),
       radial-gradient(circle at 92% 28%, rgba(255, 130, 92, 0.18) 0%, transparent 48%),
@@ -24,6 +42,7 @@
   }
 }
 
+/* Animação contínua das bolhas de carbonatação subindo dentro do copo SVG */
 @keyframes floatBubble {
   0% {
     transform: translateY(0) scale(0.85);
@@ -38,6 +57,7 @@
   }
 }
 
+/* Pulsação sutil de opacidade no feixe líquido enquanto uma bomba está ligada */
 @keyframes pulseStream {
   0%, 100% {
     opacity: 0.78;
@@ -47,6 +67,7 @@
   }
 }
 
+/* Movimento orgânico das folhas de palmeira à esquerda e à direita da tela */
 @keyframes breezeLeft {
   0%, 100% {
     transform: rotate(0deg) translateY(0px);
@@ -93,6 +114,7 @@
 }
 
 /* Sliders de dosagem com visual orgânico e quente */
+/* Recebe a cor individual de cada fruta/bomba via custom property `--slider-accent` */
 input[type="range"].pump-slider {
   -webkit-appearance: none;
   appearance: none;

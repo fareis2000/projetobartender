@@ -1,5 +1,22 @@
+/**
+ * @file SettingsDrawer.tsx
+ * @description Gaveta administrativa lateral para diagnóstico do ESP32, escolha de transporte e calibração de vazão.
+ *
+ * Papel na Arquitetura / Operação de Campo:
+ * -----------------------------------------
+ * Elimina a necessidade de editar código-fonte ou arquivos JSON manualmente durante a montagem
+ * do bar em um evento:
+ *   1. Diagnóstico sob demanda ("Testar Agora") exibindo IP resolvido, portas `COM` detectadas
+ *      no Windows/Linux e status detalhado da comunicação.
+ *   2. Seletor dos 4 modos de operação (`auto`, `wifi`, `serial`, `simulator`) + campos de
+ *      `Host / IP`, `Porta HTTP`, `Porta USB Serial` e `Baud Rate` salvos em `connection.json`.
+ *   3. Editor individual para cada uma das 4 bombas (com indicação do pino `GPIO` físico),
+ *      permitindo trocar o nome da bebida na garrafa e calibrar a vazão em `ml/s` — gravando
+ *      tanto em `pumps.json` no servidor quanto na Flash NVS do próprio ESP32 via Wi-Fi!
+ */
 import React, { useEffect, useState } from 'react';
-import { Check, RefreshCw, Save, Server, Sliders, X } from 'lucide-react';
+import { Check, Radar, RefreshCw, Save, Server, Sliders, Wifi, X } from 'lucide-react';
+import { bartenderApi } from '../api/client';
 import type {
   ConnectionConfigPayload,
   ConnectionMode,
@@ -8,19 +25,30 @@ import type {
   PumpId,
 } from '../types/bartender';
 
+/** Propriedades do painel lateral `SettingsDrawer`. */
 interface SettingsDrawerProps {
+  /** Indica se a gaveta lateral está aberta. */
   open: boolean;
+  /** Estado atual de saúde e configuração de conectividade do ESP32. */
   hardware: HardwareHealth | null;
+  /** Lista atual das 4 bombas físicas. */
   pumps: PumpConfig[];
+  /** Fecha a gaveta lateral. */
   onClose: () => void;
+  /** Persiste e retesta a configuração de conexão (`PUT /api/connection`). */
   onSaveConnection: (cfg: ConnectionConfigPayload) => Promise<void>;
+  /** Salva nome da bebida e vazão calibrada (`ml/s`) de uma bomba (`PUT /api/pumps/{id}`). */
   onSavePump: (
     pumpId: PumpId,
     data: { ingredient: string; flow_rate_ml_s: number },
   ) => Promise<void>;
+  /** Executa sondagem imediata do hardware (`GET /api/connection`). */
   onProbe: () => Promise<void>;
 }
 
+/**
+ * Gaveta lateral de configuração técnica e calibração hidráulica.
+ */
 export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   open,
   hardware,
@@ -37,12 +65,16 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [serialBaud, setSerialBaud] = useState(115200);
   const [savingConn, setSavingConn] = useState(false);
   const [probing, setProbing] = useState(false);
+  const [syncingNet, setSyncingNet] = useState(false);
+  const [syncBanner, setSyncBanner] = useState<string | null>(null);
 
+  // Rascunhos locais das 4 bombas para edição controlada antes de clicar em "OK"
   const [pumpDrafts, setPumpDrafts] = useState<
     Record<string, { ingredient: string; flow_rate_ml_s: number }>
   >({});
   const [savedPumpId, setSavedPumpId] = useState<string | null>(null);
 
+  // Sincroniza os campos do formulário sempre que um novo diagnóstico `hardware` chega do servidor
   useEffect(() => {
     if (hardware) {
       setMode(hardware.mode);
@@ -53,6 +85,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }
   }, [hardware]);
 
+  // Inicializa os rascunhos de edição com os valores atuais das bombas
   useEffect(() => {
     const next: Record<string, { ingredient: string; flow_rate_ml_s: number }> = {};
     for (const p of pumps) {
@@ -66,6 +99,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   if (!open) return null;
 
+  /** Envia os novos parâmetros de transporte aplicando fallbacks seguros caso campos fiquem vazios. */
   const handleSaveConnection = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingConn(true);
@@ -82,6 +116,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }
   };
 
+  /** Aciona sondagem manual com spinner visual no botão "Testar Agora". */
   const handleProbe = async () => {
     setProbing(true);
     try {
@@ -91,6 +126,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }
   };
 
+  /** Puxa a rede Wi-Fi atual do servidor, atualiza secrets.h, provisiona o ESP e varre a LAN. */
+  const handleSyncNetwork = async () => {
+    setSyncingNet(true);
+    setSyncBanner(null);
+    try {
+      const res = await bartenderApi.syncNetwork();
+      setSyncBanner(res.message);
+      await onProbe();
+    } catch (e: unknown) {
+      setSyncBanner(e instanceof Error ? e.message : 'Erro ao sincronizar rede');
+    } finally {
+      setSyncingNet(false);
+    }
+  };
+
+  /** Salva os ajustes de uma bomba individual e exibe ícone de confirmação (`Check`) por 1,5s. */
   const handlePumpSave = async (pid: PumpId) => {
     const draft = pumpDrafts[pid];
     if (!draft) return;
@@ -123,10 +174,10 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
         {/* Diagnóstico Atual */}
         {hardware && (
-          <div className="p-4 rounded-2xl bg-[#fff3e2] border border-[#ebd0b0] space-y-2">
+          <div className="p-4 rounded-2xl bg-[#fff3e2] border border-[#ebd0b0] space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-[#8a583c]">
-                Diagnóstico da Máquina
+                Diagnóstico da Máquina & Rede Atual
               </span>
               <button
                 type="button"
@@ -139,9 +190,48 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </button>
             </div>
             <p className="text-sm font-medium text-[#3b2116]">{hardware.detail}</p>
+            <div className="flex flex-wrap gap-2 text-[11px] text-[#69432e]">
+              {hardware.connected_ssid && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#ffedd5] border border-[#fed7aa] font-semibold">
+                  <Wifi className="w-3 h-3 text-[#ea580c]" />
+                  Wi-Fi PC: {hardware.connected_ssid}
+                  {hardware.esp_target_ssid && hardware.esp_target_ssid !== hardware.connected_ssid
+                    ? ` (2.4G: ${hardware.esp_target_ssid})`
+                    : ''}
+                </span>
+              )}
+              {hardware.server_lan_ip && (
+                <span className="px-2 py-0.5 rounded-md bg-white border border-[#e6c8a5] font-mono">
+                  IP Servidor: {hardware.server_lan_ip}:8000
+                </span>
+              )}
+              {hardware.wifi_ip && (
+                <span className="px-2 py-0.5 rounded-md bg-[#dcfce7] border border-[#86efac] text-[#166534] font-mono font-semibold">
+                  IP ESP: {hardware.wifi_ip}
+                </span>
+              )}
+            </div>
             {hardware.available_serial_ports.length > 0 && (
               <p className="text-xs text-[#7c533d]">
                 Portas COM detectadas: {hardware.available_serial_ports.join(', ')}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={handleSyncNetwork}
+              disabled={syncingNet}
+              className="w-full mt-1 py-2 px-3 rounded-xl bg-[#2d1810] hover:bg-[#432519] text-[#fffaf3] text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <Radar className={`w-3.5 h-3.5 text-[#fb923c] ${syncingNet ? 'animate-spin' : ''}`} />
+              <span>
+                {syncingNet
+                  ? 'Localizando ESP na Rede Atual...'
+                  : 'Localizar ESP & Puxar Rede Atual Automaticamente'}
+              </span>
+            </button>
+            {syncBanner && (
+              <p className="text-[11px] font-medium text-[#15803d] bg-[#dcfce7]/70 px-2.5 py-1.5 rounded-lg border border-[#86efac]">
+                {syncBanner}
               </p>
             )}
           </div>

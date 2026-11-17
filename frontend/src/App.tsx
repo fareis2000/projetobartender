@@ -1,3 +1,25 @@
+/**
+ * @file App.tsx
+ * @description Orquestrador principal da interface web do Bartender.OS v2.0 (Totem & Mobile LAN).
+ *
+ * Papel na Arquitetura:
+ * ---------------------
+ * Centraliza o estado reativo da aplicação:
+ *   1. Carregamento inicial paralelo (`Promise.all`) de receitas, bombas calibradas e saúde do ESP32.
+ *   2. Conexão persistente **WebSocket (`/api/ws`) com auto-reconexão resiliente (2,5s)**,
+ *      garantindo que tablets de autoatendimento e smartphones de convidados exibam sincronizados
+ *      o progresso do drink ao vivo — abrindo o `PreparationModal` automaticamente assim que
+ *      qualquer preparo se inicia na máquina.
+ *   3. Alternância fluida entre a vitrine filtrável de coquetéis (`Cardápio`) e o estúdio
+ *      interativo de mixologia (`Monte seu Drink`), além da gaveta técnica (`SettingsDrawer`).
+ *
+ * Valor Comercial / UX para Eventos:
+ * ----------------------------------
+ * Interface "Resort Tropical" pensada para zero curva de aprendizado em festas, feiras e
+ * ativações de marca: contraste quente de alta legibilidade, bloqueio visual automático de
+ * botões enquanto uma bebida está sendo servida (`isBusy`) e acesso rápido a ajustes de
+ * conexão caso haja troca de Wi-Fi no local.
+ */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Citrus, Sparkles, Sun } from 'lucide-react';
 import { bartenderApi } from './api/client';
@@ -18,6 +40,7 @@ import type {
   SystemSnapshot,
 } from './types/bartender';
 
+/** Estado inicial seguro exibido antes da chegada do primeiro snapshot do backend. */
 const INITIAL_STATUS: PreparationStatus = {
   state: 'idle',
   drink_id: null,
@@ -32,6 +55,10 @@ const INITIAL_STATUS: PreparationStatus = {
   total_seconds: 0,
 };
 
+/**
+ * Componente raiz da SPA do Bartender Tropical.
+ * Coordena comunicação REST + WebSocket e distribui dados calibrados para todos os subcomponentes.
+ */
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('menu');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
@@ -44,6 +71,11 @@ export const App: React.FC = () => {
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /**
+   * Busca em paralelo o cardápio calculado, a configuração das 4 bombas e o snapshot de hardware.
+   * Se detectar que uma bebida já está sendo dosada no momento em que a página foi aberta,
+   * abre automaticamente o modal de telemetria ao vivo.
+   */
   const loadCatalogAndPumps = useCallback(async () => {
     try {
       const [drinksData, pumpsData, snap] = await Promise.all([
@@ -75,6 +107,8 @@ export const App: React.FC = () => {
   }, [loadCatalogAndPumps]);
 
   // WebSocket em tempo real com reconexão automática
+  // Adapta automaticamente entre `ws://` (HTTP LAN) e `wss://` (HTTPS túnel/reverso)
+  // e reconecta em 2,5s caso o roteador oscile ou o backend seja reiniciado.
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimer: number | undefined;
@@ -114,22 +148,26 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  /** Dicionário O(1) indexado por `PumpId` para consulta rápida de cores e nomes nos cards e modal. */
   const pumpsById = useMemo(() => {
     const map = {} as Record<PumpId, PumpConfig>;
     for (const p of pumps) map[p.id] = p;
     return map;
   }, [pumps]);
 
+  /** Lista deduplicada de categorias de receitas precedida da opção `'Todos'`. */
   const categories = useMemo(() => {
     const unique = Array.from(new Set(drinks.map((d) => d.category)));
     return ['Todos', ...unique];
   }, [drinks]);
 
+  /** Subconjunto de receitas visíveis conforme a pílula de categoria ativa. */
   const filteredDrinks = useMemo(() => {
     if (selectedCategory === 'Todos') return drinks;
     return drinks.filter((d) => d.category === selectedCategory);
   }, [drinks, selectedCategory]);
 
+  /** Dispara o preparo de uma receita pronta do cardápio e exibe o modal de acompanhamento. */
   const handleDispensePreset = async (drink: DrinkRecipe) => {
     setErrorBanner(null);
     try {
@@ -143,6 +181,7 @@ export const App: React.FC = () => {
     }
   };
 
+  /** Envia a mistura autoral criada no estúdio "Monte seu Drink" para execução imediata. */
   const handleDispenseCustom = async (payload: CustomDrinkPayload) => {
     setErrorBanner(null);
     try {
@@ -156,6 +195,7 @@ export const App: React.FC = () => {
     }
   };
 
+  /** Aciona a Parada de Emergência (`POST /api/stop`) cortando imediatamente as bombas no ESP32. */
   const handleEmergencyStop = async () => {
     try {
       const st = await bartenderApi.emergencyStop();
@@ -167,11 +207,16 @@ export const App: React.FC = () => {
     }
   };
 
+  /** Persiste alterações de modo/endereço de conexão feitas no `SettingsDrawer`. */
   const handleSaveConnection = async (cfg: ConnectionConfigPayload) => {
     const updated = await bartenderApi.updateConnection(cfg);
     setHardware(updated);
   };
 
+  /**
+   * Salva o novo nome de bebida ou vazão (`ml/s`) de uma bomba e recarrega o cardápio
+   * para atualizar instantaneamente as estimativas de segundos em todos os cards.
+   */
   const handleSavePump = async (
     pumpId: PumpId,
     data: { ingredient: string; flow_rate_ml_s: number },
@@ -185,11 +230,13 @@ export const App: React.FC = () => {
     setPumps(pumpsData);
   };
 
+  /** Executa diagnóstico sob demanda ("Testar Agora") no painel lateral de hardware. */
   const handleProbe = async () => {
     const updated = await bartenderApi.getConnection();
     setHardware(updated);
   };
 
+  // Trava interações de novo pedido enquanto os motores das bombas estiverem em operação
   const isBusy = status.state === 'dispensing';
 
   return (
