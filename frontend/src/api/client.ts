@@ -280,6 +280,12 @@ export const bartenderApi = {
       body: JSON.stringify(payload),
     }),
 
+  /** Puxa a rede Wi-Fi conectada, sincroniza secrets.h, provisiona o ESP e varre a LAN. */
+  discoverMachineNetwork: (id: string) =>
+    requestJson<Machine>(`/api/bar/machines/${encodeURIComponent(id)}/discover`, {
+      method: 'POST',
+    }),
+
   /** Vincula uma garrafa do estoque a uma das 4 bombas físicas ou calibra sua vazão (`flow_rate_ml_s`). */
   updatePumpSlot: (
     machineId: string,

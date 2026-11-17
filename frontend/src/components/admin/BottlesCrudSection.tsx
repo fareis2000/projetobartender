@@ -1,14 +1,35 @@
+/**
+ * @file src/components/admin/BottlesCrudSection.tsx
+ * @description Módulo CRUD de Estoque de Garrafas com Calculadora Inteligente Bidirecional de Precificação (`R$/ml`).
+ *
+ * Papel Comercial B2B & Facilidade de Gestão para o Dono do Bar:
+ * - Resolve a maior dor operacional de bares tradicionais: transformar o custo de uma garrafa fechada
+ *   (ex.: Gin 750 ml pago a `R$ 65,00` com `3%` de perda de mangueira) em preço de venda exato por mililitro
+ *   sem precisar de planilhas Excel.
+ * - **Calculadora Sincronizada de 3 Vias**: o dono do bar pode precificar como preferir:
+ *   1. Digitando quanto quer cobrar em 1 dose clássica de `50 ml`;
+ *   2. Digitando quanto quer faturar na garrafa inteira (`usableMl`);
+ *   3. Tocando nos botões de Markup rápido (`2x`, `2.5x`, `3x`, `4x Custo`).
+ *   Todos os três campos recalculam instantaneamente `pricePerLiterCents` e exibem o lucro líquido
+ *   projetado por garrafa em tempo real!
+ */
 import React, { useState } from 'react';
 import { Calculator, Edit3, Plus, Trash2, Wine, X } from 'lucide-react';
 import { bartenderApi } from '../../api/client';
 import type { Bottle, BottlePayload } from '../../types/bartender';
 import { formatBrl, formatPerMl } from '../../utils/format';
 
+/**
+ * Propriedades do componente `BottlesCrudSection`.
+ */
 interface BottlesCrudSectionProps {
+  /** Lista atual de garrafas cadastradas no estoque do bar. */
   bottles: Bottle[];
+  /** Recarrega todos os dados do painel do bar após criar, editar ou excluir uma garrafa. */
   onRefresh: () => Promise<void>;
 }
 
+/** Paleta rápida de cores vibrantes sugeridas para diferenciar visualmente os líquidos no copo SVG. */
 const PRESET_COLORS = [
   '#f59e0b',
   '#ef4444',
@@ -20,15 +41,23 @@ const PRESET_COLORS = [
   '#14b8a6',
 ];
 
+/**
+ * Seção administrativa de gestão de insumos líquidos, perdas técnicas e margem por garrafa.
+ */
 export const BottlesCrudSection: React.FC<BottlesCrudSectionProps> = ({
   bottles,
   onRefresh,
 }) => {
+  /** ID da garrafa em edição (`null` quando cadastrando nova garrafa). */
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Controla abertura do formulário expansível de criação/edição. */
   const [formOpen, setFormOpen] = useState(false);
+  /** Indica submissão HTTP em andamento. */
   const [saving, setSaving] = useState(false);
+  /** Mensagem de erro de validação ou API exibida no topo do formulário. */
   const [error, setError] = useState<string | null>(null);
 
+  // Estados controlados dos campos cadastrais e financeiros da garrafa
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [colorHex, setColorHex] = useState('#f97316');
@@ -40,12 +69,14 @@ export const BottlesCrudSection: React.FC<BottlesCrudSectionProps> = ({
   // Preço em centavos por Litro (ex: 20000 = R$ 0,20/ml -> dose 50ml = R$ 10,00)
   const [pricePerLiterCents, setPricePerLiterCents] = useState(20000);
 
+  // Métricas derivadas ao vivo para a Calculadora de Preço de Venda
   const usableMl = Math.max(1, Math.round(volumeMl * (1 - lossPct / 100)));
   const costCents = Math.max(0, Math.round(( parseFloat(costReais.replace(',', '.')) || 0 ) * 100));
   const dose50Reais = ((50 * pricePerLiterCents) / 100_000).toFixed(2);
   const bottleTargetReais = ((usableMl * pricePerLiterCents) / 100_000).toFixed(2);
   const estProfitCents = Math.round((usableMl * pricePerLiterCents) / 1000) - costCents;
 
+  /** Prepara e abre o formulário limpo com valores padrão realistas de mercado (750ml, 3% perda). */
   const openNew = () => {
     setEditingId(null);
     setName('');
@@ -61,6 +92,7 @@ export const BottlesCrudSection: React.FC<BottlesCrudSectionProps> = ({
     setFormOpen(true);
   };
 
+  /** Carrega os dados de uma garrafa existente no formulário para edição imediata. */
   const openEdit = (b: Bottle) => {
     setEditingId(b.id);
     setName(b.name);
@@ -101,6 +133,7 @@ export const BottlesCrudSection: React.FC<BottlesCrudSectionProps> = ({
     setPricePerLiterCents(Math.max(100, Math.round((targetCents / usableMl) * 1000)));
   };
 
+  /** Persiste a nova garrafa ou alterações da garrafa atual na API do bar. */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -131,6 +164,7 @@ export const BottlesCrudSection: React.FC<BottlesCrudSectionProps> = ({
     }
   };
 
+  /** Exclui uma garrafa após alerta de segurança caso ela esteja instalada em alguma bomba ativa. */
   const handleDelete = async (b: Bottle) => {
     const warn =
       b.installed_in_pumps > 0

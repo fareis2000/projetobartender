@@ -16,7 +16,8 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
-backend/data/
+backend/data/*
+!backend/data/README.md
 *.db
 *.db-shm
 *.db-wal

@@ -345,6 +345,10 @@ export interface HardwareHealth {
   last_seen_seconds_ago: number | null;
   /** Resumo textual amigável do estado do hardware exibido ao dono do bar. */
   detail: string;
+  connected_ssid?: string | null;
+  esp_target_ssid?: string | null;
+  server_lan_ip?: string | null;
+  discovered_via?: string | null;
 }
 
 /**

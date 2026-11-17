@@ -1,5 +1,18 @@
+/**
+ * @file src/index.css
+ * @description Design System global, tipografia editorial e micro-animações vetoriais do Bartender.OS v3.0.
+ *
+ * Papel na Conversão Comercial & UX Mobile-First:
+ * - Substitui a estética fria de máquinas industriais por uma identidade "Tropical Craft / Menu de Praia Premium"
+ *   (tons quentes de papel algodão, pôr do sol cítrico e tipografia serifada `Fraunces` combinada com `Plus Jakarta Sans`).
+ * - A direção de arte acolhedora estimula o desejo visual pelos drinks, aumenta a confiança no pagamento Pix
+ *   e reforça a percepção de coquetelaria artesanal servida na medida exata.
+ * - Todas as animações (`floatBubble`, `pulseStream`, `breezeLeft/Right`) usam apenas propriedades aceleradas
+ *   por GPU (`transform` e `opacity`) para rodar a 60fps mesmo em smartphones de entrada.
+ */
 @import "tailwindcss";
 
+/* Camada base de tipografia, paleta de fundo solar e prevenção de rolagem horizontal no celular */
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
@@ -14,16 +27,19 @@
     overflow-x: hidden;
   }
 
+  /* Títulos e preços em destaque com personalidade editorial gastronômica */
   h1, h2, h3, .font-display {
     font-family: 'Fraunces', Georgia, serif;
     letter-spacing: -0.015em;
   }
 
+  /* Utilitário explícito para botões, controles e números de alta legibilidade */
   .font-sans-ui {
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
   }
 }
 
+/* Animação contínua das borbulhas de gás subindo dentro do copo SVG (GlassArtwork) */
 @keyframes floatBubble {
   0% {
     transform: translateY(0) scale(0.85);
@@ -38,6 +54,7 @@
   }
 }
 
+/* Pulsação orgânica do jato líquido enquanto a bomba peristáltica/diafragma está servindo */
 @keyframes pulseStream {
   0%, 100% {
     opacity: 0.78;
@@ -47,6 +64,7 @@
   }
 }
 
+/* Movimento suave de brisa litorânea para a folhagem botânica do canto superior esquerdo */
 @keyframes breezeLeft {
   0%, 100% {
     transform: rotate(0deg) translateY(0px);
@@ -56,6 +74,7 @@
   }
 }
 
+/* Movimento suave de brisa litorânea defasado para a folhagem botânica do canto superior direito */
 @keyframes breezeRight {
   0%, 100% {
     transform: rotate(0deg) translateY(0px);
@@ -65,6 +84,7 @@
   }
 }
 
+/* Classes utilitárias vinculadas aos elementos SVG de copo e cenário tropical */
 .bubble-rise {
   animation: floatBubble 2.5s ease-in infinite;
 }

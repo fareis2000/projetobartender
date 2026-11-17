@@ -37,7 +37,12 @@ from .auth import (
     require_superadmin,
     resolve_target_bar_id,
 )
-from .config import FRONTEND_DIST_DIR, settings
+from .config import FRONTEND_DIST_DIR, PROJECT_ROOT, settings
+from .network_discovery import (
+    get_current_network_info,
+    get_primary_lan_ip,
+    sync_secrets_h_with_current_network,
+)
 from .database import (
     authenticate_user,
     cancel_pending_order,
@@ -135,6 +140,19 @@ from .payments import (
 async def lifespan(_app: FastAPI):
     """Gerencia inicialização do banco SQLite (DDL + seeds) e workers assíncronos de manutenção."""
     init_db()
+    try:
+        lan_ip = get_primary_lan_ip()
+        with get_conn() as conn:
+            m_row = conn.execute("SELECT slug, api_token FROM machines ORDER BY created_at ASC LIMIT 1").fetchone()
+        if m_row:
+            sync_url = f"http://{lan_ip}:8010/api/iot/{m_row['slug']}/sync"
+            sync_secrets_h_with_current_network(
+                PROJECT_ROOT / "bombas" / "secrets.h",
+                api_token=str(m_row["api_token"] or ""),
+                cloud_sync_url=sync_url,
+            )
+    except Exception:
+        pass
     runtime_manager.start_background_workers()
     yield
     await runtime_manager.stop_background_workers()
@@ -160,13 +178,19 @@ app.add_middleware(
 def _infer_base_url(request: Request) -> str:
     """Resolve a URL pública base respeitando `PUBLIC_BASE_URL` ou cabeçalhos de proxy reverso (`X-Forwarded-*`).
 
-    Essencial para gerar QR Codes imprimíveis de balcão e URLs de Webhook Mercado Pago precisas
-    mesmo atrás de Cloudflare, Nginx, Caddy ou túneis HTTPS.
+    Se o painel for aberto via `localhost` ou `127.0.0.1`, substitui automaticamente o hostname pelo IP
+    IPv4 real da rede Wi-Fi/LAN atualmente conectada (`get_primary_lan_ip()`), garantindo que os QR Codes
+    de balcão e a URL de Cloud Sync do ESP32/ESP8266 funcionem imediatamente em qualquer celular ou rede!
     """
     if settings.public_base_url:
         return settings.public_base_url
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:8010"
+    host_only, _, port_part = host.partition(":")
+    if host_only.lower() in ("localhost", "127.0.0.1", "0.0.0.0"):
+        lan_ip = get_primary_lan_ip()
+        if lan_ip and not lan_ip.startswith("127."):
+            host = f"{lan_ip}:{port_part}" if port_part else lan_ip
     return f"{proto}://{host}"
 
 
@@ -696,6 +720,36 @@ async def bar_put_machine(
     """Atualiza taxa de copo, pedido mínimo, volume máximo de segurança ou modo de conexão da máquina."""
     row = update_machine(bar_id, machine_id, req)
     return await _build_machine_out(row, _infer_base_url(request), probe=True)
+
+
+@app.post("/api/bar/machines/{machine_id}/discover", response_model=MachineOut)
+async def bar_discover_machine_network(
+    machine_id: str,
+    request: Request,
+    bar_id: str = Depends(resolve_target_bar_id),
+) -> MachineOut:
+    """Puxa automaticamente a rede Wi-Fi conectada, atualiza `secrets.h`, provisiona o ESP e varre a LAN."""
+    m_row = get_machine_row_by_id(bar_id, machine_id)
+    base_url = _infer_base_url(request)
+    ex = runtime_manager.get_executor(machine_id, m_row["slug"])
+    await ex.sync_and_discover_network(base_url)
+    fresh_row = get_machine_row_by_id(bar_id, machine_id)
+    return await _build_machine_out(fresh_row, base_url, probe=False)
+
+
+@app.get("/api/network")
+async def get_network_status() -> dict[str, object]:
+    """Retorna os metadados da rede Wi-Fi/LAN atualmente conectada no servidor."""
+    info = await asyncio.to_thread(get_current_network_info, True)
+    return {
+        "connected_ssid": info.get("connected_ssid"),
+        "esp_target_ssid": info.get("esp_target_ssid"),
+        "wifi_password_available": bool(info.get("wifi_password")),
+        "primary_ip": info.get("primary_ip"),
+        "lan_ips": info.get("lan_ips", []),
+        "subnets": info.get("subnets", []),
+        "saved_profiles_count": len(info.get("saved_profiles", [])),
+    }
 
 
 @app.put("/api/bar/machines/{machine_id}/pumps/{pump_id}", response_model=list[PumpSlotOut])

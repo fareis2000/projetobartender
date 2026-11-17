@@ -1,22 +1,45 @@
+/**
+ * @file src/components/DrinkCard.tsx
+ * @description Card de vitrine gastronômica para venda rápida de receitas prontas em 1 toque via Pix.
+ *
+ * Papel na Conversão de Vendas & Transparência ao Consumidor:
+ * - Comunica instantaneamente tudo o que o cliente precisa para decidir em menos de 5 segundos:
+ *   ilustração das camadas reais no copo (`GlassArtwork`), selo `+18` automático se alcoólico,
+ *   volume exato em `ml`, tempo estimado de serviço em segundos, barra proporcional de ingredientes
+ *   e eventual desconto de combo (`-X% combo`).
+ * - Prevenção automática de frustração/estorno: quando uma das garrafas da receita entra na reserva
+ *   mínima de segurança, o card desabilita o botão de compra em tempo real e exibe `unavailable_reason`.
+ */
 import React from 'react';
 import { AlertCircle, Clock, Droplets, QrCode, Wine } from 'lucide-react';
 import type { DrinkRecipe, PumpId, PumpSlot } from '../types/bartender';
 import { formatBrl } from '../utils/format';
 import { GlassArtwork } from './GlassArtwork';
 
+/**
+ * Propriedades do card individual de receita (`DrinkCard`).
+ */
 interface DrinkCardProps {
+  /** Receita enriquecida com disponibilidade, tempo de preparo e preço final em centavos. */
   drink: DrinkRecipe;
+  /** Mapa indexado das 4 bombas da máquina para resolver nomes e cores das garrafas instaladas. */
   pumpsById: Record<PumpId, PumpSlot>;
+  /** Bloqueia cliques duplicados enquanto uma cobrança Pix está sendo gerada no backend. */
   busyCreating: boolean;
+  /** Callback acionado ao clicar em `"Pedir no Pix"`, iniciando o checkout imediato. */
   onOrderDrink: (drink: DrinkRecipe) => void;
 }
 
+/**
+ * Componente de card de produto otimizado para toque mobile e escaneabilidade visual.
+ */
 export const DrinkCard: React.FC<DrinkCardProps> = ({
   drink,
   pumpsById,
   busyCreating,
   onOrderDrink,
 }) => {
+  // Converte as etapas da receita em camadas visuais para o copo SVG usando as cores reais das garrafas
   const layers = drink.steps.map((s) => ({
     color: pumpsById[s.pump]?.color_hex ?? drink.glass_color,
     ml: s.ml,

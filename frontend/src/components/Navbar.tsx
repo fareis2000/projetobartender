@@ -1,22 +1,50 @@
+/**
+ * @file src/components/Navbar.tsx
+ * @description Barra superior fixa (sticky) da experiência Mobile-First de autoatendimento do consumidor.
+ *
+ * Papel na Conversão Mobile & Confiança do Usuário:
+ * - Ancoragem imediata de contexto: exibe o nome oficial do Bar e um selo verde confirmando a qual
+ *   máquina física (`machineName` / `machineSlug`) o smartphone está sincronizado via QR Code.
+ * - Alternância sem fricção entre compra rápida em 1 toque (`Cardápio`) e experiência gamificada de
+ *   alta margem (`Monte por ml`), respeitando a flag `allowCustomBuilder` configurada pelo dono do bar.
+ * - Botão pulsante persistente de retomada (`Pedido #...`) caso o cliente minimize o modal de pagamento
+ *   ou navegue pelo cardápio enquanto aguarda sua vez na fila.
+ */
 import React from 'react';
 import { Citrus, Palmtree, QrCode, Receipt, Sparkles, Users } from 'lucide-react';
 import type { Order } from '../types/bartender';
 import { formatBrl } from '../utils/format';
 
+/** Abas principais disponíveis na visão pública da máquina. */
 export type ActiveTab = 'menu' | 'custom';
 
+/**
+ * Propriedades do componente `Navbar`.
+ */
 interface NavbarProps {
+  /** Nome fantasia do estabelecimento exibido em destaque. */
   barName: string;
+  /** Nome amigável da máquina conectada (ex.: `"Máquina #01 · Balcão"`). */
   machineName: string;
+  /** Código slug da máquina lido no QR Code. */
   machineSlug: string;
+  /** Controla se a aba `"Monte por ml"` deve ser exibida ao consumidor. */
   allowCustomBuilder: boolean;
+  /** Aba atualmente selecionada pelo cliente. */
   activeTab: ActiveTab;
+  /** Callback disparado ao alternar entre `"Cardápio"` e `"Monte por ml"`. */
   onChangeTab: (tab: ActiveTab) => void;
+  /** Quantidade atual de pedidos pagos aguardando na fila da máquina. */
   queueLength: number;
+  /** Pedido em andamento pertencente à sessão deste aparelho, se existir. */
   activeOrder: Order | null;
+  /** Reabre o modal/bottom-sheet (`CustomerOrderSheet`) do pedido ativo ao tocar no indicador. */
   onOpenActiveOrder: () => void;
 }
 
+/**
+ * Cabeçalho responsivo com backdrop-blur para a jornada de compra via celular.
+ */
 export const Navbar: React.FC<NavbarProps> = ({
   barName,
   machineName,

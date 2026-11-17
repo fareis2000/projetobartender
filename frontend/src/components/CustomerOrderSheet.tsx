@@ -1,3 +1,22 @@
+/**
+ * @file src/components/CustomerOrderSheet.tsx
+ * @description Bottom-sheet / Modal de checkout Pix, fila inteligente anti-travamento, confirmação
+ * obrigatória de copo na base e telemetria visual de dosagem em tempo real.
+ *
+ * Papel Crítico na Operação Real de Bar & Mitigação de Riscos Físicos:
+ * - **Etapa 1 (`PENDING_PAYMENT`)**: Prioriza o botão gigante `"Pix Copia e Cola"` pensado para quem já
+ *   está segurando o próprio celular, deixando a imagem do QR Code recolhida em `<details>` para quem
+ *   paga com um segundo aparelho. Inclui também o botão de aprovação em 1 clique quando em modo `simulated`,
+ *   perfeito para feiras, pitches e demonstrações comerciais B2B.
+ * - **Etapa 2 (`PAID_QUEUED` / `PAUSED_TURN`)**: Gerencia filas de balcão movimentado sem caos: avisa para
+ *   NÃO colocar o copo enquanto outra pessoa está na frente, e se o cliente demorar para chegar até a
+ *   máquina, pausa sua vez (`PAUSED_TURN`) preservando 100% do crédito pago sem travar os próximos clientes!
+ * - **Etapa 3 (`READY_FOR_CUP`)**: Vibra o smartphone (`navigator.vibrate`) quando chega a vez do cliente
+ *   e exige um checkbox explícito confirmando que o copo vazio está posicionado no centro da bandeja antes
+ *   de energizar as bombas — eliminando derramamento de bebida cara no balcão.
+ * - **Etapa 4 (`DISPENSING` / `COMPLETED` / `FAILED_DISPENSE`)**: Mostra o copo enchendo ao vivo sincronizado
+ *   via WebSocket com o progresso real das bombas ou orienta reenvio/estorno caso ocorra parada física.
+ */
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
@@ -18,20 +37,37 @@ import type { Order, PreparationStatus, PumpId, PumpSlot } from '../types/barten
 import { formatBrl } from '../utils/format';
 import { GlassArtwork } from './GlassArtwork';
 
+/**
+ * Propriedades do componente `CustomerOrderSheet`.
+ */
 interface CustomerOrderSheetProps {
+  /** Define se a folha/modal está aberta na tela do cliente. */
   visible: boolean;
+  /** Objeto completo do pedido atual do cliente (`null` se nenhum pedido ativo). */
   order: Order | null;
+  /** Estado em tempo real das bombas da máquina recebido via WebSocket/REST. */
   machineStatus: PreparationStatus;
+  /** Mapa das 4 bombas para colorir o jato ativo com a cor exata do ingrediente em curso. */
   pumpsById: Record<PumpId, PumpSlot>;
+  /** Desabilita botões de transição enquanto uma requisição de ação do pedido está pendente. */
   busyAction: boolean;
+  /** Mensagem de erro contextual das ações do modal, se houver. */
   errorMsg: string | null;
+  /** Aprova pagamento instantâneo quando o bar opera em modo de demonstração (`simulated`). */
   onSimulatePay: () => void;
+  /** Cancela a cobrança Pix pendente e libera o cliente para escolher outro drink. */
   onCancelPending: () => void;
+  /** Retoma uma vez pausada (`PAUSED_TURN`) ou renova +60s para o cliente buscar gelo/copo. */
   onResumeTurn: () => void;
+  /** Envia a confirmação de segurança de copo posicionado e inicia o despejo físico das bombas. */
   onConfirmCupAndDispense: (confirmed: boolean) => void;
+  /** Minimiza ou encerra o modal quando permitido pelo estado atual do pedido. */
   onClose: () => void;
 }
 
+/**
+ * Orquestrador visual das 4 fases pós-clique de compra no smartphone do consumidor.
+ */
 export const CustomerOrderSheet: React.FC<CustomerOrderSheetProps> = ({
   visible,
   order,
@@ -45,20 +81,27 @@ export const CustomerOrderSheet: React.FC<CustomerOrderSheetProps> = ({
   onConfirmCupAndDispense,
   onClose,
 }) => {
+  /** Feedback visual temporário ("Copiado!") após copiar o código EMV Pix. */
   const [copied, setCopied] = useState(false);
+  /** Estado do aceite obrigatório confirmando que o copo está centralizado na plataforma. */
   const [cupChecked, setCupChecked] = useState(false);
+  /** Contador regressivo local em segundos para expiração do Pix. */
   const [localPixCountdown, setLocalPixCountdown] = useState(0);
+  /** Contador regressivo local em segundos da janela de vez na frente da máquina. */
   const [localTurnCountdown, setLocalTurnCountdown] = useState(0);
 
+  // Reseta o checkbox de confirmação de copo sempre que o pedido ou seu status mudar
   useEffect(() => {
     setCupChecked(false);
   }, [order?.id, order?.status]);
 
+  // Sincroniza os cronômetros locais com os valores autoritativos calculados pelo servidor
   useEffect(() => {
     setLocalPixCountdown(order?.seconds_until_pix_expiry ?? 0);
     setLocalTurnCountdown(order?.seconds_until_turn_expiry ?? 0);
   }, [order?.seconds_until_pix_expiry, order?.seconds_until_turn_expiry, order?.status]);
 
+  // Decrementa suavemente a cada 1 segundo para feedback visual fluido entre polls de rede
   useEffect(() => {
     if (!visible || !order) return;
     const timer = window.setInterval(() => {
@@ -81,6 +124,7 @@ export const CustomerOrderSheet: React.FC<CustomerOrderSheetProps> = ({
 
   if (!visible || !order) return null;
 
+  /** Copia o payload Pix Copia e Cola para a área de transferência do celular. */
   const copyPix = async () => {
     try {
       await navigator.clipboard.writeText(order.pix_qr_code);
@@ -91,6 +135,7 @@ export const CustomerOrderSheet: React.FC<CustomerOrderSheetProps> = ({
     }
   };
 
+  /** Formata segundos inteiros em `MM:SS` (ex.: `04:59`). */
   const formatTimer = (sec: number) => {
     const m = Math.floor(sec / 60);
     const r = sec % 60;
@@ -111,6 +156,7 @@ export const CustomerOrderSheet: React.FC<CustomerOrderSheetProps> = ({
     label: it.ingredient,
   }));
 
+  // Impede fechar acidentalmente o modal no momento crítico de confirmar o copo ou durante o jato
   const canDismiss =
     order.status === 'COMPLETED' ||
     order.status === 'CANCELED' ||

@@ -1,3 +1,17 @@
+/**
+ * @file src/pages/SuperAdminPage.tsx
+ * @description Console Master SaaS Multi-Tenant (`/superadmin`) para o fabricante/operador da plataforma Bartender.OS.
+ *
+ * Papel Estratégico no Modelo de Receita Recorrente B2B (Hardware-as-a-Service + Take-Rate Pix):
+ * - Consolida em tempo real o desempenho de toda a rede de bares licenciados: total de estabelecimentos
+ *   ativos, parque de máquinas instaladas, GMV total transacionado via Pix e **Receita Split da Plataforma**.
+ * - **Onboarding B2B em 30 Segundos**: ao vender ou alugar uma máquina para um novo estabelecimento,
+ *   o formulário `"Cadastrar Novo Bar Cliente"` já provisiona em uma única transação atômica o Tenant
+ *   do bar, o login/senha do dono, o percentual de comissão (`platform_fee_percent`) e a 1ª máquina
+ *   com slug de QR Code exclusivo pronta para operar!
+ * - **Suporte Remoto em 1 Clique (`Impersonation`)**: o botão `"Gerenciar Garrafas / Drinks deste Bar"`
+ *   injeta `X-Bar-Id` via `setInspectBarId` e abre o `/painel` daquele cliente sem precisar pedir a senha dele.
+ */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Building2,
@@ -17,11 +31,15 @@ import {
   setStoredAuthToken,
 } from '../utils/format';
 
+/**
+ * Página de governança global da plataforma multi-bares (`role === 'superadmin'`).
+ */
 export const SuperAdminPage: React.FC = () => {
   const [user, setUser] = useState<PrincipalUser | null>(null);
   const [checking, setChecking] = useState(true);
   const [overview, setOverview] = useState<PlatformOverview | null>(null);
 
+  // Credenciais master padrão de demonstração
   const [email, setEmail] = useState('superadmin@bartender.os');
   const [password, setPassword] = useState('admin123');
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -37,11 +55,13 @@ export const SuperAdminPage: React.FC = () => {
   const [machName, setMachName] = useState('Máquina #01 · Balcão');
   const [machSlug, setMachSlug] = useState('');
 
+  /** Busca o panorama executivo consolidado de todos os tenants da plataforma. */
   const loadOverview = useCallback(async () => {
     const data = await bartenderApi.getPlatformOverview();
     setOverview(data);
   }, []);
 
+  /** Valida se há token JWT ativo com privilégio `superadmin` ao abrir `/superadmin`. */
   useEffect(() => {
     const run = async () => {
       const tok = getStoredAuthToken();
@@ -64,6 +84,7 @@ export const SuperAdminPage: React.FC = () => {
     void run();
   }, [loadOverview]);
 
+  /** Autentica exclusivamente contas com perfil global `superadmin`, bloqueando contas de bares individuais. */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrMsg(null);
@@ -81,6 +102,7 @@ export const SuperAdminPage: React.FC = () => {
     }
   };
 
+  /** Provisiona um novo estabelecimento cliente (tenant), conta do proprietário e primeira máquina. */
   const handleCreateBar = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -107,11 +129,13 @@ export const SuperAdminPage: React.FC = () => {
     }
   };
 
+  /** Ativa modo de suporte remoto (`X-Bar-Id`) e navega diretamente para o painel operacional do bar escolhido. */
   const handleOpenBarPanel = (bar: BarSummary) => {
     setInspectBarId(bar.id);
     navigateTo('/painel');
   };
 
+  /** Exclui um tenant de bar e todas as suas máquinas após confirmação explícita de segurança. */
   const handleDeleteBar = async (bar: BarSummary) => {
     if (!window.confirm(`Excluir o bar "${bar.name}" e todas as máquinas vinculadas?`)) return;
     await bartenderApi.deleteBarTenant(bar.id);

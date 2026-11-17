@@ -1,3 +1,18 @@
+/**
+ * @file src/components/admin/MachinesPumpsSection.tsx
+ * @description Gestão operacional de Máquinas Físicas, geração de adesivos QR Code SVG prontos para
+ * impressão, vinculação de Garrafas às 4 Bombas, reabastecimento em 1 clique e calibração IoT (`ml/s`).
+ *
+ * Papel Comercial B2B & Operação Plug-and-Play:
+ * - **Onboarding de Hardware sem Fricção**: gera automaticamente o snippet `#define SECRET_API_TOKEN`
+ *   e `SECRET_CLOUD_SYNC_URL` pronto para colar no `secrets.h` do ESP8266/ESP32 da máquina vendida,
+ *   além de disponibilizar download direto do vetor `.svg` do QR Code de balcão (`/api/public/m/:slug/qr.svg`).
+ * - **Rotina de Balcão em 3 Segundos**: quando uma garrafa acaba na noite de sexta-feira, o repositor
+ *   só espetará a mangueira numa garrafa lacrada e tocará em `"Troquei por Garrafa Cheia"`, restaurando
+ *   100% do nível e reativando instantaneamente os drinks dependentes no celular dos clientes.
+ * - **Segurança Industrial**: inclui botão vermelho de `"Parada de Emergência"` visível durante dosagens
+ *   e calibração fina de vazão (`flow_rate_ml_s`) individual por bomba (GPIO).
+ */
 import React, { useState } from 'react';
 import {
   Copy,
@@ -5,6 +20,7 @@ import {
   OctagonAlert,
   Plus,
   QrCode,
+  Radar,
   RefreshCw,
   Save,
   Wifi,
@@ -13,12 +29,21 @@ import { bartenderApi } from '../../api/client';
 import type { Bottle, ConnectionMode, Machine, PumpId } from '../../types/bartender';
 import { formatBrl, formatPerMl, navigateTo } from '../../utils/format';
 
+/**
+ * Propriedades do componente `MachinesPumpsSection`.
+ */
 interface MachinesPumpsSectionProps {
+  /** Lista de máquinas instaladas no bar com status de bombas e saúde de hardware. */
   machines: Machine[];
+  /** Catálogo de garrafas do estoque disponível para seleção nos dropdowns das 4 mangueiras. */
   bottles: Bottle[];
+  /** Atualiza a listagem de máquinas; aceita `probe = true` para testar conectividade física ativa. */
   onRefresh: (probe?: boolean) => Promise<void>;
 }
 
+/**
+ * Painel de controle físico-digital das máquinas Bartender.OS do estabelecimento.
+ */
 export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
   machines,
   bottles,
@@ -28,8 +53,11 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [busy, setBusy] = useState(false);
+  const [discoveringId, setDiscoveringId] = useState<string | null>(null);
+  /** Rascunhos locais de calibração de vazão (`ml/s`) indexados por `${machineId}:${pumpId}`. */
   const [flowDrafts, setFlowDrafts] = useState<Record<string, string>>({});
 
+  /** Cadastra uma nova estação física no bar com parâmetros iniciais seguros de copo e pedido mínimo. */
   const handleCreateMachine = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -54,6 +82,7 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
     }
   };
 
+  /** Associa (ou remove) uma garrafa do estoque a uma das 4 bombas físicas da máquina. */
   const handleBottleSelect = async (machineId: string, pumpId: PumpId, bottleId: string) => {
     await bartenderApi.updatePumpSlot(machineId, pumpId, {
       bottle_id: bottleId || null,
@@ -61,11 +90,13 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
     await onRefresh();
   };
 
+  /** Restaura o volume restante da bomba para 100% da capacidade nominal da garrafa instalada. */
   const handleRefillFull = async (machineId: string, pumpId: PumpId) => {
     await bartenderApi.refillPump(machineId, pumpId);
     await onRefresh();
   };
 
+  /** Persiste a nova calibração de vazão (`ml/s`) medida em bancada/balcão para a bomba selecionada. */
   const handleSaveFlow = async (machineId: string, pumpId: PumpId, defaultFlow: number) => {
     const key = `${machineId}:${pumpId}`;
     const val = parseFloat(flowDrafts[key] ?? String(defaultFlow));
@@ -74,12 +105,24 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
     await onRefresh();
   };
 
+  /** Atualiza configurações operacionais da máquina (modo IoT, taxa de copo, mínimo ou construtor custom). */
   const handleUpdateMachineConfig = async (
     m: Machine,
     patch: Record<string, unknown>,
   ) => {
     await bartenderApi.updateMachine(m.id, patch);
     await onRefresh(true);
+  };
+
+  /** Puxa a rede Wi-Fi conectada, atualiza secrets.h e varre a LAN para localizar o ESP automaticamente. */
+  const handleDiscoverNetwork = async (machineId: string) => {
+    setDiscoveringId(machineId);
+    try {
+      await bartenderApi.discoverMachineNetwork(machineId);
+      await onRefresh(false);
+    } finally {
+      setDiscoveringId(null);
+    }
   };
 
   return (
@@ -200,18 +243,54 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
                     <Wifi className="w-3.5 h-3.5 text-emerald-600" />
                     <span>{m.hardware.detail}</span>
                   </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2 text-[11px] text-[#5c3724]">
+                    {m.hardware.connected_ssid && (
+                      <span className="px-2 py-0.5 rounded-md bg-[#ffedd5] border border-[#fed7aa] font-semibold">
+                        Rede Atual: {m.hardware.connected_ssid}
+                        {m.hardware.esp_target_ssid && m.hardware.esp_target_ssid !== m.hardware.connected_ssid
+                          ? ` (2.4G: ${m.hardware.esp_target_ssid})`
+                          : ''}
+                      </span>
+                    )}
+                    {m.hardware.server_lan_ip && (
+                      <span className="px-2 py-0.5 rounded-md bg-white border border-[#e5c7a3] font-mono">
+                        Servidor: {m.hardware.server_lan_ip}:8010
+                      </span>
+                    )}
+                    {m.hardware.wifi_ip && (
+                      <span className="px-2 py-0.5 rounded-md bg-[#dcfce7] border border-[#86efac] text-[#166534] font-mono font-semibold">
+                        ESP IP: {m.hardware.wifi_ip}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                {m.status.state === 'dispensing' && (
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => void bartenderApi.emergencyStopMachine(m.id).then(() => onRefresh())}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                    onClick={() => void handleDiscoverNetwork(m.id)}
+                    disabled={discoveringId === m.id}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#2d1810] hover:bg-[#432519] text-[#fffaf3] text-xs font-bold cursor-pointer"
                   >
-                    <OctagonAlert className="w-4 h-4" />
-                    Parada de Emergência
+                    <Radar className={`w-3.5 h-3.5 text-[#fb923c] ${discoveringId === m.id ? 'animate-spin' : ''}`} />
+                    <span>
+                      {discoveringId === m.id
+                        ? 'Localizando ESP...'
+                        : 'Localizar ESP na Rede Atual'}
+                    </span>
                   </button>
-                )}
+
+                  {m.status.state === 'dispensing' && (
+                    <button
+                      type="button"
+                      onClick={() => void bartenderApi.emergencyStopMachine(m.id).then(() => onRefresh())}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                    >
+                      <OctagonAlert className="w-4 h-4" />
+                      Parada de Emergência
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -292,11 +371,11 @@ export const MachinesPumpsSection: React.FC<MachinesPumpsSectionProps> = ({
               {/* Credenciais para gravar no ESP8266/ESP32 do Bar */}
               <details className="rounded-xl bg-[#fdf5ea] border border-[#ecd3b5] p-3 text-xs">
                 <summary className="font-bold text-[#5c3724] cursor-pointer">
-                  🔌 Ver credenciais Wi-Fi IoT para gravar no ESP8266/ESP32 desta máquina (secrets.h)
+                  🔌 Ver credenciais Wi-Fi IoT sincronizadas automaticamente em bombas/secrets.h
                 </summary>
                 <pre className="mt-2 p-3 rounded-lg bg-[#2d1810] text-[#fff8ee] overflow-x-auto text-[11px] font-mono">
 {`#define SECRET_API_TOKEN      "${m.api_token}"
-#define SECRET_CLOUD_SYNC_URL "${window.location.origin}/api/iot/${m.slug}/sync"`}
+#define SECRET_CLOUD_SYNC_URL "${(m.qr_url.split('/m/')[0] || window.location.origin)}/api/iot/${m.slug}/sync"`}
                 </pre>
               </details>
             </div>

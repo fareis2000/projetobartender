@@ -1,19 +1,49 @@
+/**
+ * @file src/components/GlassArtwork.tsx
+ * @description Motor vetorial SVG paramétrico que renderiza um copo Highball realista com camadas
+ * líquidas proporcionais aos mililitros reais, gelo flutuante, borbulhas, guarnição cítrica e jato ao vivo.
+ *
+ * Papel Comercial & Diferencial de Produto ("What You See Is What You Pour"):
+ * - Dispensa banco de fotos estáticas: qualquer drink novo criado pelo dono do bar no CRUD ou misturado
+ *   ao vivo pelo cliente no `"Monte por ml"` ganha instantaneamente uma ilustração de alta gastronomia
+ *   fiel às cores e proporções volumétricas das garrafas instaladas na máquina.
+ * - Durante a etapa `DISPENSING`, anima o enchimento progressivo (`fillOverridePercent`) e desenha o jato
+ *   ativo (`pouringColor`) exatamente da cor da bomba que está ligada no hardware ESP8266/ESP32.
+ */
 import React from 'react';
 
+/**
+ * Representa uma camada individual de líquido dentro do copo Highball.
+ */
 export interface LiquidLayer {
+  /** Cor hexadecimal da bebida configurada no cadastro da garrafa. */
   color: string;
+  /** Volume desta camada em mililitros (determina a espessura proporcional da faixa). */
   ml: number;
+  /** Rótulo descritivo opcional do ingrediente. */
   label?: string;
 }
 
+/**
+ * Propriedades de renderização e animação do componente `GlassArtwork`.
+ */
 interface GlassArtworkProps {
+  /** Lista ordenada de camadas líquidas (de baixo para cima no copo). */
   layers: LiquidLayer[];
+  /** Capacidade nominal máxima do copo em ml para cálculo de nível relativo (padrão `400`). */
   maxCapacityMl?: number;
+  /** Sobrescreve o percentual de preenchimento (`0..100`) durante a animação de preparo ao vivo. */
   fillOverridePercent?: number;
+  /** Quando definido, renderiza um jato líquido vertical animado nesta cor caindo no copo. */
   pouringColor?: string | null;
+  /** Escala responsiva do componente (`sm` no admin CRUD, `md` nos cards/modal, `lg` no construtor). */
   size?: 'sm' | 'md' | 'lg';
 }
 
+/**
+ * Renderiza o copo Highball SVG com `clipPath` isolado por instância (`React.useId`) para suportar
+ * dezenas de cards simultâneos na mesma página sem colisão de IDs de gradiente/recorte.
+ */
 export const GlassArtwork: React.FC<GlassArtworkProps> = ({
   layers,
   maxCapacityMl = 400,
@@ -21,9 +51,11 @@ export const GlassArtwork: React.FC<GlassArtworkProps> = ({
   pouringColor = null,
   size = 'md',
 }) => {
+  // ID único sanitizado para defs SVG (clipPath e reflexo especular do vidro)
   const uid = React.useId().replace(/:/g, '');
   const totalMl = layers.reduce((acc, l) => acc + Math.max(0, l.ml), 0);
 
+  // Calcula o nível percentual do líquido respeitando margem visual de borda (95% máx no preview)
   const computedFillPct =
     fillOverridePercent !== undefined
       ? Math.max(0, Math.min(100, fillOverridePercent))
@@ -43,6 +75,7 @@ export const GlassArtwork: React.FC<GlassArtworkProps> = ({
         ? 'w-52 h-64'
         : 'w-40 h-48';
 
+  // Empilha as faixas coloridas de baixo para cima proporcionalmente aos ml de cada bomba
   let cursorY = glassBottomY;
   const renderedSlices =
     totalMl > 0 && totalLiquidHeight > 0
@@ -60,6 +93,7 @@ export const GlassArtwork: React.FC<GlassArtworkProps> = ({
           })
       : [];
 
+  // Cor dominante usada no halo luminoso difuso atrás do copo
   const primaryGlow =
     layers.find((l) => l.ml > 0)?.color ?? pouringColor ?? '#fb923c';
 

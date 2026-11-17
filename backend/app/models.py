@@ -321,6 +321,10 @@ class HardwareHealth(BaseModel):
     iot_online: bool = False
     last_seen_seconds_ago: float | None = None
     detail: str = ""
+    connected_ssid: str | None = None
+    esp_target_ssid: str | None = None
+    server_lan_ip: str | None = None
+    discovered_via: str | None = None
 
 
 class PreparationStatus(BaseModel):

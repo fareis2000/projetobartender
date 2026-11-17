@@ -1,3 +1,17 @@
+/**
+ * @file src/components/CustomDrinkBuilder.tsx
+ * @description Construtor interativo `"Monte seu Drink na Medida"` com precificação justa ao mililitro.
+ *
+ * Papel Estratégico de Vendas B2B & Aumento de Ticket Médio:
+ * - Transforma a escolha da bebida em uma experiência lúdica: o cliente desliza sliders ou toca em
+ *   atalhos rápidos (`-25ml`, `+25ml`, `+50ml`), vê o copo `GlassArtwork` encher em camadas coloridas
+ *   em tempo real e acompanha centavo a centavo quanto cada dose custa (`R$/ml`).
+ * - Protege a rentabilidade do dono do bar e a segurança física da máquina simultaneamente:
+ *   1. Espelha exatamente a fórmula aritmética do servidor (`Math.round((ml * price_per_liter_cents) / 1000)`),
+ *      somando `cupFeeCents` e aplicando o piso `minOrderCents` quando necessário.
+ *   2. Limita cada slider ao estoque real disponível naquela garrafa (`available_ml`) e trava o pedido
+ *      se a soma ultrapassar a capacidade máxima de segurança do copo (`maxCupMl`), evitando transbordo.
+ */
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -14,12 +28,21 @@ import type { PumpId, PumpSlot } from '../types/bartender';
 import { formatBrl, formatPerMl } from '../utils/format';
 import { GlassArtwork } from './GlassArtwork';
 
+/**
+ * Propriedades do construtor personalizado por mililitro (`CustomDrinkBuilder`).
+ */
 interface CustomDrinkBuilderProps {
+  /** Lista atualizada das 4 bombas da máquina com preços por litro e ml disponíveis. */
   pumps: PumpSlot[];
+  /** Limite máximo de segurança do copo em mililitros configurado para esta máquina. */
   maxCupMl: number;
+  /** Taxa fixa opcional de copo descartável + gelo em centavos. */
   cupFeeCents: number;
+  /** Valor mínimo de consumação por pedido em centavos. */
   minOrderCents: number;
+  /** Indica criação de pedido Pix em andamento para bloquear envios concorrentes. */
   busyCreating: boolean;
+  /** Callback invocado ao finalizar a receita personalizada e solicitar o QR Code/Copia e Cola Pix. */
   onSubmitCustom: (payload: {
     name: string;
     amarelo: number;
@@ -29,8 +52,13 @@ interface CustomDrinkBuilderProps {
   }) => void;
 }
 
+/** Ordem determinística de apresentação das 4 bombas físicas no formulário e nas camadas do copo. */
 const PUMP_ORDER: PumpId[] = ['amarelo', 'vermelho', 'verde', 'azul'];
 
+/**
+ * Formulário interativo de mixologia self-service com pré-seleção inteligente inicial
+ * (sugere 50 ml do primeiro destilado disponível + até 200 ml de mixer para reduzir atrito inicial).
+ */
 export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
   pumps,
   maxCupMl,
@@ -39,7 +67,13 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
   busyCreating,
   onSubmitCustom,
 }) => {
+  /** Nome personalizado que identifica a bebida na fila e no comprovante do cliente. */
   const [name, setName] = useState('Meu Drink Exclusivo');
+
+  /**
+   * Volumes em ml escolhidos para cada uma das 4 bombas, inicializados com uma sugestão equilibrada
+   * baseada nas garrafas com estoque disponível para que o cliente já veja um copo montado ao abrir a aba.
+   */
   const [volumes, setVolumes] = useState<Record<PumpId, number>>(() => {
     const initial: Record<PumpId, number> = { amarelo: 0, vermelho: 0, verde: 0, azul: 0 };
     for (const p of pumps) {
@@ -54,6 +88,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     return initial;
   });
 
+  /** Índice rápido `PumpId -> PumpSlot` memorizado para leituras O(1) no cálculo de preço e renderização. */
   const pumpsById = useMemo(() => {
     const map = {} as Record<PumpId, PumpSlot>;
     for (const p of pumps) map[p.pump_id] = p;
@@ -96,6 +131,10 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     };
   }, [volumes, pumpsById, cupFeeCents, minOrderCents, totalMl]);
 
+  /**
+   * Ajusta o volume de uma bomba específica em múltiplos de 5 ml, respeitando o teto individual
+   * de 350 ml, a capacidade máxima do copo e o estoque útil restante na garrafa instalada.
+   */
   const setPumpVolume = (pid: PumpId, nextVal: number) => {
     const slot = pumpsById[pid];
     const maxBottle = slot?.bottle_id ? Math.floor(slot.available_ml / 5) * 5 : 0;
@@ -104,6 +143,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     setVolumes((prev) => ({ ...prev, [pid]: clamped }));
   };
 
+  /** Esvazia todas as bombas no simulador para que o cliente comece uma mistura do zero. */
   const resetAll = () => {
     setVolumes({ amarelo: 0, vermelho: 0, verde: 0, azul: 0 });
   };
@@ -114,6 +154,7 @@ export const CustomDrinkBuilder: React.FC<CustomDrinkBuilderProps> = ({
     label: pumpsById[pid]?.ingredient ?? pid,
   }));
 
+  /** Valida limites de segurança volumétrica e dispara a geração da cobrança Pix. */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (overLimit || underLimit || busyCreating) return;

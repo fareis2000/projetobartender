@@ -1,3 +1,15 @@
+/**
+ * @file src/components/TropicalDecor.tsx
+ * @description Ilustrações vetoriais SVG autorais (zero requisições externas de imagem) para ambientação
+ * "Tropical Craft" da interface do consumidor.
+ *
+ * Papel na Performance 4G/5G & Branding B2B2C:
+ * - Em bares, casas noturnas e eventos abertos, o sinal 4G costuma ser congestionado. Ao embutir
+ *   ilustrações vetoriais puras em SVG (< 3 KB gzipped) em vez de fotos PNG/JPG pesadas, o cardápio
+ *   abre instantaneamente com visual premium de beach club sem consumir franquia de dados nem atrasar o Pix.
+ * - Camadas decorativas marcadas com `pointer-events-none` e `aria-hidden="true"` para jamais interferir
+ *   na acessibilidade ou no toque rápido dos botões de compra.
+ */
 import React from 'react';
 
 /**
@@ -129,4 +141,3 @@ export const TropicalHeroArt: React.FC = () => {
     </div>
   );
 };
-

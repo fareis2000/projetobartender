@@ -1,3 +1,15 @@
+/**
+ * @file src/components/admin/DrinksCrudSection.tsx
+ * @description Engenharia de Cardápio (CRUD Completo de Drinks) com simulador visual `GlassArtwork`
+ * ao vivo, sequenciador de etapas de bombas e precificação dinâmica ou tabelada.
+ *
+ * Papel Comercial B2B & Agilidade de Operação no Salão:
+ * - Permite ao dono ou barman-chefe lançar promoções relâmpago ("Happy Hour -15% combo"), criar
+ *   receitas autorais em camadas (até 6 etapas com pausa em milissegundos entre jatos) e visualizar
+ *   instantaneamente como o copo aparecerá no celular do consumidor.
+ * - Exibe na listagem administrativa o **Custo Líquido (CMV)** e o **Lucro por Copo** de cada receita,
+ *   permitindo decisões orientadas a margem e pausa em 1 clique (`Eye` / `EyeOff`) sem apagar o cadastro.
+ */
 import React, { useMemo, useState } from 'react';
 import { Edit3, Eye, EyeOff, Plus, Trash2, X } from 'lucide-react';
 import { bartenderApi } from '../../api/client';
@@ -12,16 +24,28 @@ import type {
 import { formatBrl } from '../../utils/format';
 import { GlassArtwork } from '../GlassArtwork';
 
+/**
+ * Propriedades do componente `DrinksCrudSection`.
+ */
 interface DrinksCrudSectionProps {
+  /** Lista de todas as receitas cadastradas no bar (ativas e ocultas). */
   drinks: DrinkRecipe[];
+  /** Estado atual das 4 bombas da máquina principal para preview de ingredientes e preços por ml. */
   pumps: PumpSlot[];
+  /** Taxa de copo/gelo da máquina de referência em centavos. */
   cupFeeCents: number;
+  /** Valor mínimo de pedido da máquina de referência em centavos. */
   minOrderCents: number;
+  /** Callback para recarregar dados do bar após alterações no cardápio. */
   onRefresh: () => Promise<void>;
 }
 
+/** Opções fixas das 4 bombas físicas disponíveis nos seletores de etapa da receita. */
 const PUMP_OPTIONS: PumpId[] = ['amarelo', 'vermelho', 'verde', 'azul'];
 
+/**
+ * Seção administrativa para criação, edição, ativação/pausa e exclusão de drinks do cardápio.
+ */
 export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
   drinks,
   pumps,
@@ -34,6 +58,7 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Estados do editor de receita, identidade visual do card e política de preço
   const [name, setName] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [description, setDescription] = useState('');
@@ -50,12 +75,17 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
     { pump: 'azul', ml: 220, pause_ms: 0 },
   ]);
 
+  /** Mapa indexado das bombas atuais para lookup imediato de cor hexadecimal, nome e preço/L. */
   const pumpsById = useMemo(() => {
     const m = {} as Record<PumpId, PumpSlot>;
     for (const p of pumps) m[p.pump_id] = p;
     return m;
   }, [pumps]);
 
+  /**
+   * Simulador em tempo real da receita sendo editada: calcula volume total, soma avulsa dos ml,
+   * aplica desconto percentual ou preço fixo e monta as camadas coloridas do preview `GlassArtwork`.
+   */
   const livePreview = useMemo(() => {
     let rawLiquids = 0;
     let totalMl = 0;
@@ -80,6 +110,7 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
     };
   }, [steps, pumpsById, cupFeeCents, fixedPriceReais, pricingMode, minOrderCents, discountPct, accentFrom]);
 
+  /** Inicializa o formulário para cadastro de uma nova receita autoral. */
   const openNew = () => {
     setEditingId(null);
     setName('');
@@ -101,6 +132,7 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
     setFormOpen(true);
   };
 
+  /** Preenche o formulário com todos os atributos e etapas clonadas de um drink já existente. */
   const openEdit = (d: DrinkRecipe) => {
     setEditingId(d.id);
     setName(d.name);
@@ -119,20 +151,24 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
     setFormOpen(true);
   };
 
+  /** Atualiza parcialmente uma etapa específica da sequência de dosagem (`pump`, `ml` ou `pause_ms`). */
   const updateStep = (idx: number, patch: Partial<DoseStep>) => {
     setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   };
 
+  /** Adiciona uma nova etapa ao roteiro da bebida (limite de até 6 etapas por copo). */
   const addStep = () => {
     if (steps.length >= 6) return;
     setSteps((prev) => [...prev, { pump: 'azul', ml: 50, pause_ms: 0 }]);
   };
 
+  /** Remove uma etapa da receita preservando ao menos 1 etapa obrigatória. */
   const removeStep = (idx: number) => {
     if (steps.length <= 1) return;
     setSteps((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  /** Envia o payload validado de criação ou atualização da receita ao backend. */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -168,11 +204,13 @@ export const DrinksCrudSection: React.FC<DrinksCrudSectionProps> = ({
     }
   };
 
+  /** Alterna rapidamente a visibilidade pública de um drink no cardápio (`Ativo` <-> `Oculto`). */
   const handleToggleActive = async (d: DrinkRecipe) => {
     await bartenderApi.updateDrink(d.id, { active: !d.active });
     await onRefresh();
   };
 
+  /** Remove definitivamente um drink do catálogo após confirmação explícita do operador. */
   const handleDeleteDrink = async (d: DrinkRecipe) => {
     if (!window.confirm(`Excluir permanentemente o drink "${d.name}" do cardápio?`)) return;
     await bartenderApi.deleteDrink(d.id);

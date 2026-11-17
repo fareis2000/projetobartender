@@ -1,3 +1,20 @@
+/**
+ * @file src/pages/CustomerMachinePage.tsx
+ * @description Página principal de Autoatendimento Mobile-First (`/m/:machineSlug`) acionada quando o
+ * cliente aponta a câmera do celular para o QR Code da máquina Bartender.OS.
+ *
+ * Arquitetura de Resiliência Mobile 4G/5G & Jornada de Conversão em 3 Toques:
+ * - **Zero App / Zero Wi-Fi Local**: roda direto no navegador padrão do iOS/Android pela rede móvel do
+ *   cliente, eliminando a barreira de baixar app ou pedir senha de Wi-Fi no bar lotado.
+ * - **Tripla Sincronização Resiliente**:
+ *   1. **WebSocket dedicado** (`/api/ws/machines/:slug`) com reconexão automática a cada 2.5s para
+ *      atualizar progresso das bombas, fila e estoque das garrafas em tempo real;
+ *   2. **Evento `visibilitychange`**: assim que o cliente sai do navegador para pagar o Pix no app do
+ *      banco (Nubank, Itaú, Inter, etc.) e volta para a aba do drink, a página ressincroniza no mesmo
+ *      milissegundo (`loadContext` + `refreshOrder`), já exibindo o Pix aprovado!
+ *   3. **Polling leve de segurança (2.2s)** enquanto houver pedido ativo não-terminal, blindando a UX
+ *      contra quedas silenciosas de pacotes TCP quando o 4G alterna de antena dentro da balada.
+ */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Citrus, Lock, QrCode, Sparkles, Sun } from 'lucide-react';
 import { bartenderApi } from '../api/client';
@@ -16,15 +33,26 @@ import type {
 } from '../types/bartender';
 import { getOrCreateCustomerSessionId, navigateTo } from '../utils/format';
 
+/**
+ * Propriedades da página pública da máquina (`CustomerMachinePage`).
+ */
 interface CustomerMachinePageProps {
+  /** Identificador único da máquina extraído da rota `/m/:machineSlug`. */
   machineSlug: string;
 }
 
+/**
+ * Orquestrador completo da jornada do consumidor final: vitrine de drinks, construtor por ml,
+ * pagamento Pix e liberação segura das bombas.
+ */
 export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machineSlug }) => {
+  /** Identificador persistente da sessão deste smartphone no `localStorage`. */
   const sessionId = useMemo(() => getOrCreateCustomerSessionId(), []);
   const [activeTab, setActiveTab] = useState<ActiveTab>('menu');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+  /** Contexto público completo do bar e da máquina sincronizada. */
   const [ctx, setCtx] = useState<MachinePublicContext | null>(null);
+  /** Pedido ativo pertencente ao cliente atual (restaurado inclusive após F5 ou retorno do banco). */
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busyCreating, setBusyCreating] = useState(false);
@@ -33,6 +61,10 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
   const [orderError, setOrderError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /**
+   * Carrega cardápio, bombas e estado da máquina, reabrindo automaticamente o `CustomerOrderSheet`
+   * caso esta sessão já possua um pedido pago ou aguardando pagamento (`active_customer_order`).
+   */
   const loadContext = useCallback(async () => {
     try {
       const data = await bartenderApi.getPublicMachine(machineSlug, sessionId);
@@ -56,6 +88,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     void loadContext();
   }, [loadContext]);
 
+  /** Consulta o status mais recente do pedido ativo e força a abertura do modal na hora de pôr o copo. */
   const refreshOrder = useCallback(async (ordId: string) => {
     try {
       const updated = await bartenderApi.getOrder(ordId);
@@ -142,23 +175,27 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     };
   }, [machineSlug]);
 
+  /** Dicionário indexado das bombas atuais da máquina. */
   const pumpsById = useMemo(() => {
     const map = {} as Record<PumpId, PumpSlot>;
     for (const p of ctx?.pumps ?? []) map[p.pump_id] = p;
     return map;
   }, [ctx?.pumps]);
 
+  /** Lista única de categorias extraída dinamicamente dos drinks ativos do bar. */
   const categories = useMemo(() => {
     const unique = Array.from(new Set((ctx?.drinks ?? []).map((d) => d.category)));
     return ['Todos', ...unique];
   }, [ctx?.drinks]);
 
+  /** Lista de receitas filtrada pela pílula de categoria escolhida pelo usuário. */
   const filteredDrinks = useMemo(() => {
     const list = ctx?.drinks ?? [];
     if (selectedCategory === 'Todos') return list;
     return list.filter((d) => d.category === selectedCategory);
   }, [ctx?.drinks, selectedCategory]);
 
+  /** Inicia pedido Pix de 1 toque para uma receita pronta do cardápio. */
   const handleOrderPreset = async (drink: DrinkRecipe) => {
     setBusyCreating(true);
     setErrorBanner(null);
@@ -177,6 +214,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     }
   };
 
+  /** Inicia pedido Pix para uma combinação autoral criada na aba `"Monte por ml"`. */
   const handleOrderCustom = async (payload: {
     name: string;
     amarelo: number;
@@ -201,6 +239,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     }
   };
 
+  /** Confirma pagamento simulado (Sandbox) para testes e demonstrações comerciais. */
   const handleSimulatePay = async () => {
     if (!currentOrder) return;
     setBusyOrderAction(true);
@@ -215,6 +254,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     }
   };
 
+  /** Cancela cobrança Pix ainda não paga e fecha o modal. */
   const handleCancelPending = async () => {
     if (!currentOrder) return;
     setBusyOrderAction(true);
@@ -231,6 +271,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     }
   };
 
+  /** Reativa a vez do cliente na frente da máquina ou adiciona fôlego extra no timer de copo. */
   const handleResumeTurn = async () => {
     if (!currentOrder) return;
     setBusyOrderAction(true);
@@ -245,6 +286,7 @@ export const CustomerMachinePage: React.FC<CustomerMachinePageProps> = ({ machin
     }
   };
 
+  /** Confirma copo posicionado na plataforma e ordena o início imediato da dosagem física. */
   const handleConfirmCupAndDispense = async (confirmed: boolean) => {
     if (!currentOrder) return;
     setBusyOrderAction(true);
